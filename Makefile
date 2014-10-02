@@ -76,6 +76,10 @@ RANLIB		= ranlib
 OEXT		= o
 LEXT		= a
 
+ifdef GPGPU
+LIBS := $(LIBS) -lOpenCL
+endif
+
 # Verbosity level [0-3]
 ifndef VERBOSE
 VERBOSE	= 1
@@ -146,8 +150,18 @@ MISCOBJ = util.$(OEXT) wire.$(OEXT)
 MISCHDR = util.h wire.h
 MISCIN	= hotspot.config
 
+# GPU related
+GPUSRC = gpu.c
+GPUOBJ = gpu.$(OEXT)
+GPUHDR = gpu.h
+GPUIN = rk4.cl
+
 # all objects
 OBJ	= $(TEMPOBJ) $(PACKOBJ) $(BLKOBJ) $(GRIDOBJ) $(FLPOBJ) $(MISCOBJ)
+
+ifdef GPGPU
+OBJ	:= $(OBJ) $(GPUOBJ)
+endif
 
 # targets
 all:	hotspot hotfloorplan lib
@@ -173,10 +187,14 @@ lib: 	hotspot hotfloorplan
 	$(AR) libhotspot.$(LEXT) $(OBJ)
 	$(RANLIB) libhotspot.$(LEXT)
 
-.c.$(OEXT):
+gpu.c:  rk4.cl
+	xxd -i rk4.cl > rk4_kernel_str.c
+	touch gpu.c
+
+%.$(OEXT) : %.c
 	$(CC) $(CFLAGS) -c $*.c
 
-.cpp.$(OEXT):
+%.$(OEXT) : %.cpp
 	$(CC) $(CFLAGS) -c $*.cpp
 
 filelist:
@@ -187,6 +205,10 @@ filelist:
 		  sim-template_block.c \
 		  tofig.pl grid_thermal_map.pl \
 		  Makefile Makefile.VC
+ifdef GPGPU
+	@echo $(GPUSRC) $(GRIDHDR) $(GPUHDR) $(GPUIN)
+endif
+
 clean:
 	$(RM) *.$(OEXT) *.obj core *~ Makefile.bak hotspot hotfloorplan libhotspot.$(LEXT)
 
