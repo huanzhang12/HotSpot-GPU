@@ -707,12 +707,20 @@ void steady_state_temp(RC_model_t *model, double *power, double *temp)
 }
 
 /* transient (instantaneous) temperature	*/
+#if GPGPU > 0
+void compute_temp(RC_model_t *model, double *power, double *temp, double time_elapsed, gpu_config_t *gpu_config)
+#else
 void compute_temp(RC_model_t *model, double *power, double *temp, double time_elapsed)
+#endif
 {
 	if (model->type == BLOCK_MODEL)
 		compute_temp_block(model->block, power, temp, time_elapsed);
 	else if (model->type == GRID_MODEL)	
+		#if GPGPU > 0
+		compute_temp_grid(model->grid, power, temp, time_elapsed, gpu_config);
+		#else
 		compute_temp_grid(model->grid, power, temp, time_elapsed);
+		#endif
 	else fatal("unknown model type\n");	
 }
 

@@ -19,6 +19,10 @@
 #include "util.h"
 #include "hotspot.h"
 
+#if GPGPU > 0
+#include "gpu.h"
+#endif
+
 /* HotSpot thermal model is offered in two flavours - the block
  * version and the grid version. The block model models temperature
  * per functional block of the floorplan while the grid model
@@ -298,6 +302,10 @@ int main(int argc, char **argv)
 	thermal_config_t thermal_config;
 	/* global configuration parameters	*/
 	global_config_t global_config;
+#if GPGPU > 0
+	/* GPGPU parameters */
+	gpu_config_t gpu_config;
+#endif
 	/* table to hold options and configuration */
 	str_pair table[MAX_ENTRIES];
 	
@@ -333,7 +341,15 @@ int main(int argc, char **argv)
 	thermal_config = default_thermal_config();
 	/* modify according to command line / config file	*/
 	thermal_config_add_from_strs(&thermal_config, table, size);
-	
+
+#if GPGPU > 0
+	/* get defaults */
+	gpu_config = default_gpu_config();
+	/* modify according to command line / config file	*/
+	gpu_config_from_strs(&gpu_config, table, size);
+	/* initialize GPU */
+	gpu_init(&gpu_config);
+#endif
 	/* if package model is used, run package model */
 	if (((idx = get_str_index(table, size, "package_model_used")) >= 0) && !(table[idx].value==0)) {
 		if (thermal_config.package_model_used) {
@@ -450,10 +466,17 @@ int main(int argc, char **argv)
 			 * this is used to maintain the internal grid temperatures 
 			 * across multiple calls of compute_temp
 			 */
+			#if GPGPU > 0
+			if (model->type == BLOCK_MODEL || lines == 0)
+				compute_temp(model, power, temp, model->config->sampling_intvl, &gpu_config);
+			else
+				compute_temp(model, power, NULL, model->config->sampling_intvl, &gpu_config);
+			#else
 			if (model->type == BLOCK_MODEL || lines == 0)
 				compute_temp(model, power, temp, model->config->sampling_intvl);
 			else
 				compute_temp(model, power, NULL, model->config->sampling_intvl);
+			#endif
 	
 			/* permute back to the trace file order	*/
 			if (model->type == BLOCK_MODEL)
@@ -563,6 +586,9 @@ int main(int argc, char **argv)
 	#endif
 
 	/* cleanup	*/
+#if GPGPU > 0
+	gpu_destroy(&gpu_config);
+#endif
 	fclose(pin);
 	if (do_transient)
 		fclose(tout);

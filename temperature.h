@@ -4,6 +4,10 @@
 #include "flp.h"
 #include "util.h"
 
+#if GPGPU > 0
+#include "gpu.h"
+#endif
+
 /* temperature sanity check threshold for natural convection and thermal runaway*/
 #define TEMP_HIGH	500.0
 
@@ -361,7 +365,11 @@ void populate_C_model(RC_model_t *model, flp_t *flp);
 
 /* hotspot main interfaces - temperature.c	*/
 void steady_state_temp(RC_model_t *model, double *power, double *temp);
+#if GPGPU > 0
+void compute_temp(RC_model_t *model, double *power, double *temp, double time_elapsed, gpu_config_t *gpu_config);
+#else
 void compute_temp(RC_model_t *model, double *power, double *temp, double time_elapsed);
+#endif
 /* differs from 'dvector()' in that memory for internal nodes is also allocated	*/
 double *hotspot_vector(RC_model_t *model);
 /* copy 'src' to 'dst' except for a window of 'size'

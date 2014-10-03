@@ -9,6 +9,9 @@
  * input in the form of a layer configuration file. 
  */
 #include "temperature.h"
+#if GPGPU > 0
+#include "gpu.h"
+#endif
 
 /* layer configuration file constants */
 #define LCF_NPARAMS			7	/* no. of parameters per layer	*/
@@ -172,7 +175,11 @@ void populate_C_model_grid(grid_model_t *model, flp_t *flp);
 
 /* hotspot main interfaces - temperature.c	*/
 void steady_state_temp_grid(grid_model_t *model, double *power, double *temp);
+#if GPGPU > 0
+void compute_temp_grid(grid_model_t *model, double *power, double *temp, double time_elapsed, gpu_config_t *gpu_config);
+#else
 void compute_temp_grid(grid_model_t *model, double *power, double *temp, double time_elapsed);
+#endif
 
 /* differs from 'dvector()' in that memory for internal nodes is also allocated	*/
 double *hotspot_vector_grid(grid_model_t *model);

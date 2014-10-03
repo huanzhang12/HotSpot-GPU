@@ -2893,7 +2893,11 @@ void slope_fn_grid(grid_model_t *model, double *v, grid_model_vector_t *p, doubl
 	slope_fn_pack(model, v, p, dv);
 }
 
+#if GPGPU > 0
+void compute_temp_grid(grid_model_t *model, double *power, double *temp, double time_elapsed, gpu_config_t *gpu_config)
+#else
 void compute_temp_grid(grid_model_t *model, double *power, double *temp, double time_elapsed)
+#endif
 {
 	double t, h, new_h;
 	int extra_nodes;
@@ -2937,12 +2941,23 @@ void compute_temp_grid(grid_model_t *model, double *power, double *temp, double 
 		/* pass the entire grid and the tail of package nodes 
 		 * as a 1-d array
 		 */
-		new_h = rk4(model, model->last_trans->cuboid[0][0],  p, 
+		#if GPGPU > 0
+		if (gpu_config->gpu_enabled) {
+			new_h = rk4_gpu(model, model->last_trans->cuboid[0][0],  p, 
+				 /* array size = grid size + EXTRA	*/
+				 model->rows * model->cols * model->n_layers + extra_nodes, &h,
+				 model->last_trans->cuboid[0][0], gpu_config);
+		}
+		else
+		#endif
+		{
+			new_h = rk4(model, model->last_trans->cuboid[0][0],  p, 
 				 /* array size = grid size + EXTRA	*/
 				 model->rows * model->cols * model->n_layers + extra_nodes, &h,
 				 model->last_trans->cuboid[0][0], 
 				 /* the slope function callback is typecast accordingly */
 				 (slope_fn_ptr) slope_fn_grid);
+		}
 		new_h = MIN(new_h, time_elapsed-t-h);
 		#if VERBOSE > 1
 			i++;
