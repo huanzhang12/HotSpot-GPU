@@ -66,7 +66,7 @@ else
 ifeq ($(DEBUG), 2)
 OFLAGS		= -O3 -pg -ggdb -Wall
 else
-OFLAGS		= -O3
+OFLAGS		= -O3 -Wno-unused-result
 endif	# DEBUG = 2
 endif	# DEBUG = 1
 endif	# end MATHACCEL
@@ -161,6 +161,7 @@ OBJ	= $(TEMPOBJ) $(PACKOBJ) $(BLKOBJ) $(GRIDOBJ) $(FLPOBJ) $(MISCOBJ)
 
 ifdef GPGPU
 OBJ	:= $(OBJ) $(GPUOBJ)
+CFLAGS	:= $(CFLAGS) -DGPGPU=1
 endif
 
 # targets
