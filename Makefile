@@ -189,7 +189,7 @@ lib: 	hotspot hotfloorplan
 	$(RANLIB) libhotspot.$(LEXT)
 
 gpu.c:  rk4.cl
-	xxd -i rk4.cl > rk4_kernel_str.c
+	cpp rk4.cl | xxd -i > rk4_kernel_str.c
 	touch gpu.c
 
 %.$(OEXT) : %.c

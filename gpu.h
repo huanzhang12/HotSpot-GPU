@@ -7,6 +7,8 @@
     #include "CL/cl.h"
 #endif
 
+#include "gpu_rk4.h"
+
 /* GPU configuration	*/
 typedef struct gpu_config_t_st
 {
@@ -20,6 +22,9 @@ typedef struct gpu_config_t_st
 	cl_program _cl_program;
 	cl_kernel _cl_kernel_rk4;
 	cl_command_queue _cl_queue;
+
+	gpu_grid_model_t model;
+	gpu_layer_t* layer;
 		
 }gpu_config_t;
 
@@ -32,7 +37,7 @@ void gpu_config_from_strs(gpu_config_t *config, str_pair *table, int size);
 int gpu_config_to_strs(gpu_config_t *config, str_pair *table, int max_entries);
 double gpu_rk4(void *model, double *y, void *p, int n, double *h, double *yout);
 
-void gpu_init(gpu_config_t *config);
+void gpu_init(gpu_config_t *config, grid_model_t *model);
 void gpu_destroy(gpu_config_t *config);
 
 double rk4_gpu(void *model, double *y, void *p, int n, double *h, double *yout, gpu_config_t *config);
