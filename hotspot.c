@@ -342,14 +342,6 @@ int main(int argc, char **argv)
 	/* modify according to command line / config file	*/
 	thermal_config_add_from_strs(&thermal_config, table, size);
 
-#if GPGPU > 0
-	/* get defaults */
-	gpu_config = default_gpu_config();
-	/* modify according to command line / config file	*/
-	gpu_config_from_strs(&gpu_config, table, size);
-	/* initialize GPU */
-	gpu_init(&gpu_config);
-#endif
 	/* if package model is used, run package model */
 	if (((idx = get_str_index(table, size, "package_model_used")) >= 0) && !(table[idx].value==0)) {
 		if (thermal_config.package_model_used) {
@@ -425,6 +417,15 @@ int main(int argc, char **argv)
 	names = alloc_names(MAX_UNITS, STR_SIZE);
 	if(read_names(pin, names) != n)
 		fatal("no. of units in floorplan and trace file differ\n");
+
+#if GPGPU > 0
+	/* get defaults */
+	gpu_config = default_gpu_config();
+	/* modify according to command line / config file	*/
+	gpu_config_from_strs(&gpu_config, table, size);
+	/* initialize GPU */
+	gpu_init(&gpu_config, model->grid);
+#endif
 
 	/* header line of temperature trace	*/
 	if (do_transient)

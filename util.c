@@ -11,6 +11,11 @@
 #include <assert.h>
 
 #include "util.h"
+#if GPGPU > 0
+/* aligned memory allocation */
+#include <malloc.h>
+#define calloc(nmemb, size) ({void* _ptr = valloc((nmemb) * (size)); memset(_ptr, 0, (nmemb) * (size)); _ptr;})
+#endif
 
 int eq(double x, double y)
 {

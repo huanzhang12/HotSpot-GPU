@@ -2943,10 +2943,10 @@ void compute_temp_grid(grid_model_t *model, double *power, double *temp, double 
 		 */
 		#if GPGPU > 0
 		if (gpu_config->gpu_enabled) {
-			new_h = rk4_gpu(model, model->last_trans->cuboid[0][0],  p, 
+			new_h = rk4_gpu(gpu_config, model, model->last_trans->cuboid[0][0],  p,
 				 /* array size = grid size + EXTRA	*/
 				 model->rows * model->cols * model->n_layers + extra_nodes, &h,
-				 model->last_trans->cuboid[0][0], gpu_config);
+				 model->last_trans->cuboid[0][0]);
 		}
 		else
 		#endif

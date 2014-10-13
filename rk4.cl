@@ -1,4 +1,14 @@
 #include "gpu_rk4.h"
+#pragma OPENCL EXTENSION cl_amd_fp64 : enable
+/*
+#ifdef cl_khr_fp64
+    #pragma OPENCL EXTENSION cl_khr_fp64 : enable
+#elif defined(cl_amd_fp64)
+    #pragma OPENCL EXTENSION cl_amd_fp64 : enable
+#else
+    #error "Double precision floating point not supported by OpenCL implementation."
+#endif
+*/
 
 __kernel void rk4(__global float4* data, 
       __local float* local_result, __global float* group_result) {
@@ -64,11 +74,12 @@ void sum_col(__global double *v, int nl, int nr, int nc, __local double *local_r
 
 __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model, __constant gpu_layer_t *l, __global double *v, __global double *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local double *local_result)
 {
+
 	/* sum of the currents(power values)	*/
 	double psum;
 	
 	/* shortcuts	*/
-	gpu_package_RC_t *pk = &model->pack;
+	__constant gpu_package_RC_t *pk = &model->pack;
 	double ambient = model->config.ambient;
 	/* l is not used */
 	// layer_t *l = model->layers;
@@ -79,14 +90,14 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model, __constant g
 	int nr = model->rows;
 	int nc = model->cols;
 	*/
-	unsigned nl_nr_nc_product = mul24(nl, nr) * nc;
+	unsigned int nl_nr_nc_product = mul24(nl, nr) * nc;
 	int spidx, hsidx, metalidx, c4idx, subidx, solderidx, pcbidx;
 	
 	/* pointer to the starting address of the extra nodes	*/
-	double *x = v + nl_nr_nc_product;
+	__global double *x = v + nl_nr_nc_product;
 
 	unsigned int block_id = mad24(get_group_id(1), get_num_groups(0), get_group_id(0));
-	unsigned int thread_id = mad24(get_global_id(1), get_global_size(0), get_global_size(0));
+	unsigned int thread_id = mad24(get_global_id(1), get_global_size(0), get_global_id(0));
 	unsigned int local_id = mad24(get_local_id(1), get_local_size(0), get_local_id(0));
 	unsigned int num_blocks_mask = (0x1u << (31 - clz(mul24(get_num_groups(0), get_num_groups(1))))) - 0x1u;
 	unsigned int group_job_id = 1;
@@ -116,7 +127,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model, __constant g
 		psum = (ambient - x[SINK_S])/(pk->r_hs_per + pk->r_amb_per) + 
 			   (x[SINK_C_S] - x[SINK_S])/(pk->r_hs2_y + pk->r_hs);
 		dv[nl_nr_nc_product + SINK_S] = psum / (pk->c_hs_per + pk->c_amb_per);
-
+	
 		/* sink outer west/east	*/
 		psum = (ambient - x[SINK_W])/(pk->r_hs_per + pk->r_amb_per) + 
 			   (x[SINK_C_W] - x[SINK_W])/(pk->r_hs2_x + pk->r_hs);
