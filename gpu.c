@@ -249,7 +249,7 @@ void gpu_init(gpu_config_t *config, grid_model_t *model)
 	err |= clSetKernelArg(config->_cl_kernel_rk4, 4, sizeof(model->n_layers), &model->n_layers);
 	err |= clSetKernelArg(config->_cl_kernel_rk4, 5, sizeof(model->rows), &model->rows);
 	err |= clSetKernelArg(config->_cl_kernel_rk4, 6, sizeof(model->cols), &model->cols);
-	err |= clSetKernelArg(config->_cl_kernel_rk4, 7, (config->local_work_size[0] * config->local_work_size[1]) * config->element_size, NULL);
+	err |= clSetKernelArg(config->_cl_kernel_rk4, 7, 4 * (config->local_work_size[0] + 2) * (config->local_work_size[1] + 2) * config->element_size, NULL); // shared memory for 4 layers
 	err |= clSetKernelArg(config->_cl_kernel_rk4, 8, sizeof(cl_mem), &config->d_p_cuboid);
 	gpu_check_error(err, "Couldn't setup a OpenCL kernel argument");
 
@@ -436,6 +436,7 @@ void slope_fn_grid_gpu_kernel(gpu_config_t *config, grid_model_t *model, double 
 	int err;
 	unsigned int data_offset = 0;
 	size_t buffer_size = config->vector_size;
+#if 1
 	// prepare a pinned buffer
 	config->h_v = clCreateBuffer(config->_cl_context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, buffer_size, v, &err);
 	gpu_check_error(err, "clCreateBuffer() for h_v failed.");
@@ -454,14 +455,20 @@ void slope_fn_grid_gpu_kernel(gpu_config_t *config, grid_model_t *model, double 
 
 	// copy result back
 	config->h_result = clCreateBuffer(config->_cl_context, CL_MEM_WRITE_ONLY | CL_MEM_USE_HOST_PTR, buffer_size, dv, &err);
+	// config->h_result = clCreateBuffer(config->_cl_context, CL_MEM_WRITE_ONLY | CL_MEM_USE_HOST_PTR, buffer_size, v, &err);
 	gpu_check_error(err, "clCreateBuffer() for h_result failed.");
 	config->pinned_h_result = clEnqueueMapBuffer(config->_cl_queue, config->h_result, CL_TRUE, CL_MAP_WRITE, 0, buffer_size, 0, NULL, NULL, &err);
+	// config->pinned_h_result = clEnqueueMapBuffer(config->_cl_queue, config->h_result, CL_TRUE, CL_MAP_WRITE, 0, config->cuboid_size, 0, NULL, NULL, &err);
 	gpu_check_error(err, "clEnqueueMapBuffer() for pinned_h_result failed.");
 	clEnqueueReadBuffer(config->_cl_queue, config->d_dv, CL_TRUE, data_offset, buffer_size - data_offset, config->pinned_h_result + data_offset, 0, NULL, NULL);
+	// clEnqueueReadBuffer(config->_cl_queue, config->d_dv, CL_TRUE, data_offset, config->cuboid_size - data_offset, config->pinned_h_result + data_offset, 0, NULL, NULL);
 	// release memory
 	clEnqueueUnmapMemObject(config->_cl_queue, config->h_result, config->pinned_h_result, 0, NULL, NULL);
 	clReleaseMemObject(config->h_v);
 	clReleaseMemObject(config->h_result);
+#endif
+
+	// slope_fn_grid_gpu(config, model, v, p, dv);
 }
 
 /* function to access a 1-d array as a 3-d matrix	*/
@@ -647,7 +654,8 @@ void slope_fn_grid_gpu(gpu_config_t *config, grid_model_t *model, double *v, gri
 				/* update the current cell's temperature	*/	   
 				A3D(dv,n,i,j,nl,nr,nc) = (p->cuboid[n][i][j] + psum) / l[n].c;
 			}
-	slope_fn_pack_gpu_kernel(config, model, v, p, dv);
+	// slope_fn_pack_gpu_kernel(config, model, v, p, dv);
+	slope_fn_pack_gpu(config, model, v, p, dv);
 }
 
 /* compute the slope vector for the package nodes	*/
@@ -925,6 +933,5 @@ void slope_fn_pack_gpu(gpu_config_t *config, grid_model_t *model, double *v, gri
 		psum += (x[SOLDER_E] - x[SUB_E])/pk->r_solder_per_x;
 		dv[nl*nr*nc + SUB_E] = psum / pk->c_sub_per_x;
 	}
-	printf("dv[0]=%f\n", dv[0]);
 }
 

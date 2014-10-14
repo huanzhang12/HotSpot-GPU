@@ -38,7 +38,7 @@ __kernel void rk4(__global float4* data,
 
 /* function to access a 1-d array as a 3-d matrix	*/
 // #define A3D(array,n,i,j,nl,nr,nc)		(array[(n)*(nr)*(nc) + (i)*(nc) + (j)])
-#define A3D(array,n,i,j,nl,nr,nc)		(array[nr*mul24((int)n, (int)nc) + mad24((int)i, (int)nc, (int)j)])
+#define A3D(array,n,i,j,nl,nr,nc)		(array[(nr)*mul24((int)(n), (int)(nc)) + mad24((int)(i), (int)(nc), (int)(j))])
 
 //finds sum of a row minus subVal
 void sum_row(__global double *v, int nl, int nr, int nc, __local double *local_result, int n, int i, double sub_val) {
@@ -467,20 +467,60 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model, __constant g
 # define EP(l,v,n,i,j,nl,nr,nc)		((j < nc-1) ? ((A3D(v,n,i,j+1,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].rx) : 0.0)
 /* current(power) from the next cell west. zero if on western boundary	*/
 # define WP(l,v,n,i,j,nl,nr,nc)		((j > 0) ? ((A3D(v,n,i,j-1,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].rx) : 0.0)
-/* current(power) from the next cell below. zero if on bottom face		*/
+/* current(power) from the next cell below. zero if on bottom face (with LAYERS_MASKulo)		*/
 # define BP(l,v,n,i,j,nl,nr,nc)		((n < nl-1) ? ((A3D(v,n+1,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].rz) : 0.0)
-/* current(power) from the next cell above. zero if on top face			*/
+/* current(power) from the next cell above. zero if on top face	(with LAYERS_MASKulo)		*/
 # define AP(l,v,n,i,j,nl,nr,nc)		((n > 0) ? ((A3D(v,n-1,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n-1].rz) : 0.0)
 
-/* compute the slope vector for the grid cells. the transient
- * equation is CdV + sum{(T - Ti)/Ri} = P 
- * so, slope = dV = [P + sum{(Ti-T)/Ri}]/C
- */
-__kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model, __constant gpu_layer_t *l, __global double *v, __global double *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local double *local_result, __global double *p_cuboid)
+/* Macros for reading from shared memory */
+#define LAYERS_IN_LOCAL_MEM 4
+#define LAYERS_MASK ((LAYERS_IN_LOCAL_MEM) - 1)
+/* current(power) from the next cell north. zero if on northern boundary	*/
+# define NP_s(l,v,n,i,j,nl,nr,nc)		((A3D(v,(n)&(LAYERS_MASK),i-1,j,nl,nr,nc)-A3D(v,(n)&(LAYERS_MASK),i,j,nl,nr,nc))/l[n].ry)
+/* current(power) from the next cell south. zero if on southern boundary	*/
+# define SP_s(l,v,n,i,j,nl,nr,nc)		((A3D(v,(n)&(LAYERS_MASK),i+1,j,nl,nr,nc)-A3D(v,(n)&(LAYERS_MASK),i,j,nl,nr,nc))/l[n].ry)
+/* current(power) from the next cell east. zero if on eastern boundary	*/
+# define EP_s(l,v,n,i,j,nl,nr,nc)		((A3D(v,(n)&(LAYERS_MASK),i,j+1,nl,nr,nc)-A3D(v,(n)&(LAYERS_MASK),i,j,nl,nr,nc))/l[n].rx)
+/* current(power) from the next cell west. zero if on western boundary	*/
+# define WP_s(l,v,n,i,j,nl,nr,nc)		((A3D(v,(n)&(LAYERS_MASK),i,j-1,nl,nr,nc)-A3D(v,(n)&(LAYERS_MASK),i,j,nl,nr,nc))/l[n].rx)
+/* current(power) from the next cell below. zero if on bottom face (with LAYERS_MASKulo)		*/
+# define BP_s(l,v,n,i,j,nl,nr,nc)		((n < nl-1) ? ((A3D(v,(n+1)&(LAYERS_MASK),i,j,nl,nr,nc)-A3D(v,(n)&(LAYERS_MASK),i,j,nl,nr,nc))/l[n].rz) : 0.0)
+/* current(power) from the next cell above. zero if on top face	(with LAYERS_MASKulo)		*/
+# define AP_s(l,v,n,i,j,nl,nr,nc)		((n > 0) ? ((A3D(v,(n-1)&(LAYERS_MASK),i,j,nl,nr,nc)-A3D(v,(n)&(LAYERS_MASK),i,j,nl,nr,nc))/l[n-1].rz) : 0.0)
+
+void load_v_to_shared(__global double *v, __local double * v_cached_layer, int n, unsigned int nl, unsigned int nr, unsigned int nc)
+{
+	int i = get_global_id(1); // row (row-major)
+	int j = get_global_id(0); // column
+	int index = mad24(get_local_id(1) + 1, get_local_size(0) + 2, get_local_id(0) + 1);
+	v_cached_layer[index] = A3D(v,n,i,j,nl,nr,nc); // local location: row = get_local_id(1)+1, column = get_local_id(0)+1
+	/* use the first and last worker rows to retrive the first and last extra rows */
+	if (get_local_id(1) == 0) {
+		index = get_local_id(0) + 1;
+		v_cached_layer[index] = (i > 0) ? A3D(v,n,i-1,j,nl,nr,nc) : A3D(v,n,i,j,nl,nr,nc);
+	}
+	if (get_local_id(1) == get_local_size(1) - 1) {
+		index = mad24(get_local_size(1) + 1, get_local_size(0) + 2, get_local_id(0) + 1);
+		v_cached_layer[index] = (i < nr-1) ? A3D(v,n,i+1,j,nl,nr,nc) : A3D(v,n,i,j,nl,nr,nc);
+	}
+	/* use the first and last worker columns to retrive the first and last extra columns */
+	if (get_local_id(0) == 0) {
+		index = mul24(get_local_id(1) + 1, get_local_size(0) + 2);
+		v_cached_layer[index] = (j > 0) ? A3D(v,n,i,j-1,nl,nr,nc) : A3D(v,n,i,j,nl,nr,nc);
+	}
+	if (get_local_id(0) == get_local_size(0) - 1) {
+		index = mad24(get_local_id(1) + 1, get_local_size(0) + 2, get_local_size(0) + 1);
+		v_cached_layer[index] = (j < nc-1) ? A3D(v,n,i,j+1,nl,nr,nc) : A3D(v,n,i,j,nl,nr,nc);
+	}
+	barrier(CLK_LOCAL_MEM_FENCE);
+}
+
+__kernel void slope_fn_grid_gpu_test(__constant gpu_grid_model_t *model, __constant gpu_layer_t *l, __global double *v, __global double *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local double *local_result, __global double *p_cuboid)
 {
 	int n;
-	int i = get_global_id(0);
-	int j = get_global_id(1);
+	int i = get_global_id(1); // row (row-major)
+	int j = get_global_id(0); // column
+	
 	/* sum of the currents(power values)	*/
 	double psum;
 	
@@ -494,7 +534,88 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model, __constant g
 	double ambient = model->config.ambient;
 	double s_pcb = model->config.s_pcb;
 	/* pointer to the starting address of the extra nodes	*/
-	__global double *x = v + nl*nr*nc;
+	__global double *x = v + mul24(nl, nr) * nc;
+
+	/* local memory cached v[] (4 layers maximum) */
+	__local double * v_cached[4];
+	n = mul24((get_local_size(0) + 2), (get_local_size(1) + 2));
+	v_cached[0] = local_result;
+	v_cached[1] = local_result + n;
+	v_cached[2] = v_cached[1] + n;
+	v_cached[3] = v_cached[2] + n;
+	/* load the first 4 layers */
+	for(n=0; n < min(nl, 0x4u); n++) {
+		load_v_to_shared(v, v_cached[n], n, nl, nr, nc);
+	}
+	uint next_layer = n - 1;
+	// for local memory access
+	int i_s = get_local_id(1) + 1;
+	int j_s = get_local_id(0) + 1;
+	int nr_s = get_local_size(1) + 2;
+	int nc_s = get_local_size(0) + 2;
+	
+	// A3D(v,0,i,j,nl,nr,nc) = A3D(v_cached[0],0,i_s,j_s,nl,nr_s,nc_s);
+	for(n=0; n < nl; n++) {
+		bool load_next_layer = (n == next_layer) && (next_layer + 1 < nl);
+		double psum = 0.0;
+		int n_s = n & 0x3;
+		if (load_next_layer) {
+			++next_layer;
+			load_v_to_shared(v, v_cached[next_layer & 0x3], next_layer, nl, nr, nc);
+		}
+		psum = 	(NP(l,v,n,i,j,nl,nr,nc) - NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s)) + 
+			(SP(l,v,n,i,j,nl,nr,nc) - SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s)) + 
+			(WP(l,v,n,i,j,nl,nr,nc) - WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s)) + 
+			(EP(l,v,n,i,j,nl,nr,nc) - EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s)) + 
+			(AP(l,v,n,i,j,nl,nr,nc) - AP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s)) + 
+			(BP(l,v,n,i,j,nl,nr,nc) - BP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s));
+		// A3D(dv,n,i,j,nl,nr,nc) = A3D(v,n,i,j,nl,nr,nc) + psum;
+		A3D(dv,n,i,j,nl,nr,nc) = A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s) + psum;
+	}
+}
+
+/* compute the slope vector for the grid cells. the transient
+ * equation is CdV + sum{(T - Ti)/Ri} = P 
+ * so, slope = dV = [P + sum{(Ti-T)/Ri}]/C
+ */
+__kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model, __constant gpu_layer_t *l, __global double *v, __global double *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local double *local_result, __global double *p_cuboid)
+{
+	int n;
+	int i = get_global_id(1); // row (row-major)
+	int j = get_global_id(0); // column
+	
+	/* sum of the currents(power values)	*/
+	double psum;
+	
+	/* shortcuts for cell width(cw) and cell height(ch)	*/
+	double cw = model->width / model->cols;
+	double ch = model->height / model->rows;
+
+	/* shortcuts	*/
+	int spidx, hsidx, metalidx, c4idx, subidx, solderidx, pcbidx;
+	bool model_secondary = model->config.model_secondary;
+	double ambient = model->config.ambient;
+	double s_pcb = model->config.s_pcb;
+	/* pointer to the starting address of the extra nodes	*/
+	__global double *x = v + mul24(nl, nr) * nc;
+
+	/* local memory cached v[] (4 layers maximum) */
+	__local double * v_cached[4];
+	n = mul24((get_local_size(0) + 2), (get_local_size(1) + 2));
+	v_cached[0] = local_result;
+	v_cached[1] = local_result + n;
+	v_cached[2] = v_cached[1] + n;
+	v_cached[3] = v_cached[2] + n;
+	/* load the first 4 layers */
+	for(n=0; n < min(nl, 0x4u); n++) {
+		load_v_to_shared(v, v_cached[n], n, nl, nr, nc);
+	}
+	uint next_layer = n - 1;
+	// for local memory access
+	int i_s = get_local_id(1) + 1;
+	int j_s = get_local_id(0) + 1;
+	int nr_s = get_local_size(1) + 2;
+	int nc_s = get_local_size(0) + 2;
 	
 	if (!model_secondary) {
 		spidx = nl - DEFAULT_PACK_LAYERS + LAYER_SP;
@@ -506,130 +627,138 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model, __constant g
 		c4idx = nl - DEFAULT_PACK_LAYERS - SEC_PACK_LAYERS - SEC_CHIP_LAYERS + LAYER_C4;
 		subidx = nl - SEC_PACK_LAYERS + LAYER_SUB;
 		solderidx = nl - SEC_PACK_LAYERS + LAYER_SOLDER;
-		pcbidx = nl - SEC_PACK_LAYERS + LAYER_PCB;		
+		pcbidx = nl - SEC_PACK_LAYERS + LAYER_PCB;
 	}
 	
 	/* for each grid cell	*/
 	for(n=0; n < nl; n++) {
+		/* load the next layer to local memory (layer n is in buffer right now, but n+1 isn't) */
+		bool load_next_layer = (n == next_layer) && (next_layer + 1 < nl);
+		int n_s = n & 3;
+		if (load_next_layer) {
+			++next_layer;
+			load_v_to_shared(v, v_cached[next_layer & 0x3], next_layer, nl, nr, nc);
+		}
 		if (n==LAYER_SI && model_secondary) { //top silicon layer
-			psum = NP(l,v,n,i,j,nl,nr,nc) + SP(l,v,n,i,j,nl,nr,nc) + 
-			   EP(l,v,n,i,j,nl,nr,nc) + WP(l,v,n,i,j,nl,nr,nc) + 
-			   ((A3D(v,metalidx,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[metalidx].rz) +
-			   ((A3D(v,n+1,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].rz);
+			psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+			   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+			   ((A3D(v,metalidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[metalidx].rz) +
+			   ((A3D(v,n+1,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
 		} else if (n==spidx && model_secondary) { //spreader layer
-			psum = NP(l,v,n,i,j,nl,nr,nc) + SP(l,v,n,i,j,nl,nr,nc) + 
-			   EP(l,v,n,i,j,nl,nr,nc) + WP(l,v,n,i,j,nl,nr,nc) + 
-			   ((A3D(v,metalidx-1,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[metalidx-1].rz) +
-			   ((A3D(v,hsidx,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].rz);
+			psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+			   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+			   ((A3D(v,metalidx-1,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[metalidx-1].rz) +
+			   ((A3D(v,hsidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
 		} else if (n==metalidx && model_secondary) { //metal layer
-			psum = NP(l,v,n,i,j,nl,nr,nc) + SP(l,v,n,i,j,nl,nr,nc) + 
-			   EP(l,v,n,i,j,nl,nr,nc) + WP(l,v,n,i,j,nl,nr,nc) + 
-			   ((A3D(v,c4idx,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[c4idx].rz) +
-			   ((A3D(v,LAYER_SI,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].rz);
+			psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+			   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+			   ((A3D(v,c4idx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[c4idx].rz) +
+			   ((A3D(v,LAYER_SI,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
 		} else if (n==metalidx-1 && model_secondary) { // TIM layer
-			psum = NP(l,v,n,i,j,nl,nr,nc) + SP(l,v,n,i,j,nl,nr,nc) + 
-			   EP(l,v,n,i,j,nl,nr,nc) + WP(l,v,n,i,j,nl,nr,nc) + 
-			   ((A3D(v,metalidx-2,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[metalidx-2].rz) +
-			   ((A3D(v,spidx,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].rz);
+			psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+			   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+			   ((A3D(v,metalidx-2,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[metalidx-2].rz) +
+			   ((A3D(v,spidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
 		} else if (n==c4idx && model_secondary) { //C4 layer
-			psum = NP(l,v,n,i,j,nl,nr,nc) + SP(l,v,n,i,j,nl,nr,nc) + 
-			   EP(l,v,n,i,j,nl,nr,nc) + WP(l,v,n,i,j,nl,nr,nc) + 
-			   ((A3D(v,subidx,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[subidx].rz) +
-			   ((A3D(v,metalidx,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].rz);
+			psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+			   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+			   ((A3D(v,subidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[subidx].rz) +
+			   ((A3D(v,metalidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
 		} else if (n==subidx && model_secondary) { //Substrate layer
-			psum = NP(l,v,n,i,j,nl,nr,nc) + SP(l,v,n,i,j,nl,nr,nc) + 
-			   EP(l,v,n,i,j,nl,nr,nc) + WP(l,v,n,i,j,nl,nr,nc) + 
-			   ((A3D(v,solderidx,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[solderidx].rz) +
-			   ((A3D(v,c4idx,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].rz);
+			psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+			   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+			   ((A3D(v,solderidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[solderidx].rz) +
+			   ((A3D(v,c4idx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
 		} else if (n==pcbidx && model_secondary) { //PCB layer
-			psum = NP(l,v,n,i,j,nl,nr,nc) + SP(l,v,n,i,j,nl,nr,nc) + 
-			   EP(l,v,n,i,j,nl,nr,nc) + WP(l,v,n,i,j,nl,nr,nc) + 
-			   ((A3D(v,solderidx,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].rz);
+			psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+			   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+			   ((A3D(v,solderidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
 		} else if (n==hsidx && model_secondary) { // heatsink layer
-			psum = NP(l,v,n,i,j,nl,nr,nc) + SP(l,v,n,i,j,nl,nr,nc) + 
-			   EP(l,v,n,i,j,nl,nr,nc) + WP(l,v,n,i,j,nl,nr,nc) + 
-			   ((A3D(v,spidx,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[spidx].rz);
+			psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+			   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+			   ((A3D(v,spidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[spidx].rz);
 		} else {
 			/* sum the currents(power values) to cells north, south, 
 		 	* east, west, above and below
 		 	*/
-			psum = NP(l,v,n,i,j,nl,nr,nc) + SP(l,v,n,i,j,nl,nr,nc) + 
-			   EP(l,v,n,i,j,nl,nr,nc) + WP(l,v,n,i,j,nl,nr,nc) + 
-			   AP(l,v,n,i,j,nl,nr,nc) + BP(l,v,n,i,j,nl,nr,nc);
+			
+			psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+			   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+			   AP(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + BP(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s);
 		}
 
 		/* spreader core is connected to its periphery	*/
 		if (n == spidx) {
 			/* northern boundary - edge cell has half the ry	*/
 			if (i == 0)
-				psum += (x[SP_N] - A3D(v,n,i,j,nl,nr,nc))/(l[n].ry/2.0 + nc*model->pack.r_sp1_y); 
+				psum += (x[SP_N] - A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/(l[n].ry/2.0 + nc*model->pack.r_sp1_y); 
 			/* southern boundary - edge cell has half the ry	*/
 			if (i == nr-1)
-				psum += (x[SP_S] - A3D(v,n,i,j,nl,nr,nc))/(l[n].ry/2.0 + nc*model->pack.r_sp1_y); 
+				psum += (x[SP_S] - A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/(l[n].ry/2.0 + nc*model->pack.r_sp1_y); 
 			/* eastern boundary	 - edge cell has half the rx	*/
 			if (j == nc-1)
-				psum += (x[SP_E] - A3D(v,n,i,j,nl,nr,nc))/(l[n].rx/2.0 + nr*model->pack.r_sp1_x); 
+				psum += (x[SP_E] - A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/(l[n].rx/2.0 + nr*model->pack.r_sp1_x); 
 			/* western boundary	 - edge cell has half the rx	*/
 			if (j == 0)
-				psum += (x[SP_W] - A3D(v,n,i,j,nl,nr,nc))/(l[n].rx/2.0 + nr*model->pack.r_sp1_x); 
+				psum += (x[SP_W] - A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/(l[n].rx/2.0 + nr*model->pack.r_sp1_x); 
 		/* heatsink core is connected to its inner periphery and ambient	*/
 		} else if (n == hsidx) {
 			/* all nodes are connected to the ambient	*/
-			psum += (ambient - A3D(v,n,i,j,nl,nr,nc))/l[n].rz;
+			psum += (ambient - A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz;
 			/* northern boundary - edge cell has half the ry	*/
 			if (i == 0)
-				psum += (x[SINK_C_N] - A3D(v,n,i,j,nl,nr,nc))/(l[n].ry/2.0 + nc*model->pack.r_hs1_y); 
+				psum += (x[SINK_C_N] - A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/(l[n].ry/2.0 + nc*model->pack.r_hs1_y); 
 			/* southern boundary - edge cell has half the ry	*/
 			if (i == nr-1)
-				psum += (x[SINK_C_S] - A3D(v,n,i,j,nl,nr,nc))/(l[n].ry/2.0 + nc*model->pack.r_hs1_y); 
+				psum += (x[SINK_C_S] - A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/(l[n].ry/2.0 + nc*model->pack.r_hs1_y); 
 			/* eastern boundary	 - edge cell has half the rx	*/
 			if (j == nc-1)
-				psum += (x[SINK_C_E] - A3D(v,n,i,j,nl,nr,nc))/(l[n].rx/2.0 + nr*model->pack.r_hs1_x); 
+				psum += (x[SINK_C_E] - A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/(l[n].rx/2.0 + nr*model->pack.r_hs1_x); 
 			/* western boundary	 - edge cell has half the rx	*/
 			if (j == 0)
-				psum += (x[SINK_C_W] - A3D(v,n,i,j,nl,nr,nc))/(l[n].rx/2.0 + nr*model->pack.r_hs1_x); 
+				psum += (x[SINK_C_W] - A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/(l[n].rx/2.0 + nr*model->pack.r_hs1_x); 
 		}	else if (n == pcbidx && model_secondary) {
 			/* all nodes are connected to the ambient	*/
-			psum += (ambient - A3D(v,n,i,j,nl,nr,nc))/(model->config.r_convec_sec * 
+			psum += (ambient - A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/(model->config.r_convec_sec * 
 						   (s_pcb * s_pcb) / (cw * ch));
 			/* northern boundary - edge cell has half the ry	*/
 			if (i == 0)
-				psum += (x[PCB_C_N] - A3D(v,n,i,j,nl,nr,nc))/(l[n].ry/2.0 + nc*model->pack.r_pcb1_y); 
+				psum += (x[PCB_C_N] - A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/(l[n].ry/2.0 + nc*model->pack.r_pcb1_y); 
 			/* southern boundary - edge cell has half the ry	*/
 			if (i == nr-1)
-				psum += (x[PCB_C_S] - A3D(v,n,i,j,nl,nr,nc))/(l[n].ry/2.0 + nc*model->pack.r_pcb1_y); 
+				psum += (x[PCB_C_S] - A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/(l[n].ry/2.0 + nc*model->pack.r_pcb1_y); 
 			/* eastern boundary	 - edge cell has half the rx	*/
 			if (j == nc-1)
-				psum += (x[PCB_C_E] - A3D(v,n,i,j,nl,nr,nc))/(l[n].rx/2.0 + nr*model->pack.r_pcb1_x); 
+				psum += (x[PCB_C_E] - A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/(l[n].rx/2.0 + nr*model->pack.r_pcb1_x); 
 			/* western boundary	 - edge cell has half the rx	*/
 			if (j == 0)
-				psum += (x[PCB_C_W] - A3D(v,n,i,j,nl,nr,nc))/(l[n].rx/2.0 + nr*model->pack.r_pcb1_x); 
+				psum += (x[PCB_C_W] - A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/(l[n].rx/2.0 + nr*model->pack.r_pcb1_x); 
 		}	else if (n == subidx && model_secondary) {
 			/* northern boundary - edge cell has half the ry	*/
 			if (i == 0)
-				psum += (x[SUB_N] - A3D(v,n,i,j,nl,nr,nc))/(l[n].ry/2.0 + nc*model->pack.r_sub1_y); 
+				psum += (x[SUB_N] - A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/(l[n].ry/2.0 + nc*model->pack.r_sub1_y); 
 			/* southern boundary - edge cell has half the ry	*/
 			if (i == nr-1)
-				psum += (x[SUB_S] - A3D(v,n,i,j,nl,nr,nc))/(l[n].ry/2.0 + nc*model->pack.r_sub1_y); 
+				psum += (x[SUB_S] - A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/(l[n].ry/2.0 + nc*model->pack.r_sub1_y); 
 			/* eastern boundary	 - edge cell has half the rx	*/
 			if (j == nc-1)
-				psum += (x[SUB_E] - A3D(v,n,i,j,nl,nr,nc))/(l[n].rx/2.0 + nr*model->pack.r_sub1_x); 
+				psum += (x[SUB_E] - A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/(l[n].rx/2.0 + nr*model->pack.r_sub1_x); 
 			/* western boundary	 - edge cell has half the rx	*/
 			if (j == 0)
-				psum += (x[SUB_W] - A3D(v,n,i,j,nl,nr,nc))/(l[n].rx/2.0 + nr*model->pack.r_sub1_x); 
+				psum += (x[SUB_W] - A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/(l[n].rx/2.0 + nr*model->pack.r_sub1_x); 
 		}	else if (n == solderidx && model_secondary) {
 			/* northern boundary - edge cell has half the ry	*/
 			if (i == 0)
-				psum += (x[SOLDER_N] - A3D(v,n,i,j,nl,nr,nc))/(l[n].ry/2.0 + nc*model->pack.r_solder1_y); 
+				psum += (x[SOLDER_N] - A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/(l[n].ry/2.0 + nc*model->pack.r_solder1_y); 
 			/* southern boundary - edge cell has half the ry	*/
 			if (i == nr-1)
-				psum += (x[SOLDER_S] - A3D(v,n,i,j,nl,nr,nc))/(l[n].ry/2.0 + nc*model->pack.r_solder1_y); 
+				psum += (x[SOLDER_S] - A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/(l[n].ry/2.0 + nc*model->pack.r_solder1_y); 
 			/* eastern boundary	 - edge cell has half the rx	*/
 			if (j == nc-1)
-				psum += (x[SOLDER_E] - A3D(v,n,i,j,nl,nr,nc))/(l[n].rx/2.0 + nr*model->pack.r_solder1_x); 
+				psum += (x[SOLDER_E] - A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/(l[n].rx/2.0 + nr*model->pack.r_solder1_x); 
 			/* western boundary	 - edge cell has half the rx	*/
 			if (j == 0)
-				psum += (x[SOLDER_W] - A3D(v,n,i,j,nl,nr,nc))/(l[n].rx/2.0 + nr*model->pack.r_solder1_x); 
+				psum += (x[SOLDER_W] - A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/(l[n].rx/2.0 + nr*model->pack.r_solder1_x); 
 		}
 
 		/* update the current cell's temperature	*/	   

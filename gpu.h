@@ -65,6 +65,7 @@ void gpu_delete_buffers(gpu_config_t *config);
 
 double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, double *h, double *yout);
 void rk4_core_gpu(gpu_config_t *config, void *model, double *y, double *k1, void *p, int n, double h, double *yout);
+void slope_fn_grid_gpu_kernel(gpu_config_t *config, grid_model_t *model, double *v, grid_model_vector_t *p, double *dv);
 void slope_fn_grid_gpu(gpu_config_t *config, grid_model_t *model, double *v, grid_model_vector_t *p, double *dv);
 void slope_fn_pack_gpu_kernel(gpu_config_t *config, grid_model_t *model, double *v, grid_model_vector_t *p, double *dv);
 void slope_fn_pack_gpu(gpu_config_t *config, grid_model_t *model, double *v, grid_model_vector_t *p, double *dv);

@@ -188,15 +188,17 @@ lib: 	hotspot hotfloorplan
 	$(AR) libhotspot.$(LEXT) $(OBJ)
 	$(RANLIB) libhotspot.$(LEXT)
 
-gpu.c:  rk4.cl
-	cpp rk4.cl | xxd -i > rk4_kernel_str.c
-	touch gpu.c
-
 %.$(OEXT) : %.c
 	$(CC) $(CFLAGS) -c $*.c
 
 %.$(OEXT) : %.cpp
 	$(CC) $(CFLAGS) -c $*.cpp
+
+gpu.o:  gpu.c rk4_kernel_str.c
+	$(CC) $(CFLAGS) -c gpu.c
+
+rk4_kernel_str.c: rk4.cl
+	cpp rk4.cl | xxd -i > rk4_kernel_str.c
 
 filelist:
 	@echo $(FLPSRC) $(TEMPSRC) $(PACKSRC) $(BLKSRC) $(GRIDSRC) $(MISCSRC) \
@@ -211,7 +213,7 @@ ifdef GPGPU
 endif
 
 clean:
-	$(RM) *.$(OEXT) *.obj core *~ Makefile.bak hotspot hotfloorplan libhotspot.$(LEXT)
+	$(RM) *.$(OEXT) *.obj rk4_kernel_str.c core *~ Makefile.bak hotspot hotfloorplan libhotspot.$(LEXT)
 
 cleano:
 	$(RM) *.$(OEXT) *.obj
