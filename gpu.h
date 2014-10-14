@@ -33,6 +33,7 @@ typedef struct gpu_config_t_st
 	void* pinned_h_result;
 	cl_mem d_v;
 	cl_mem d_dv;
+	cl_mem d_p_cuboid;
 	cl_mem d_c_model;
 	cl_mem d_c_layer;
 
