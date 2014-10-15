@@ -144,6 +144,9 @@ void gpu_create_buffers(gpu_config_t *config, grid_model_t *model)
 	config->d_v = clCreateBuffer(config->_cl_context, CL_MEM_READ_WRITE, config->vector_size, NULL, NULL);
 	config->d_dv = clCreateBuffer(config->_cl_context, CL_MEM_WRITE_ONLY, config->vector_size, NULL, NULL);
 	config->d_p_cuboid = clCreateBuffer(config->_cl_context, CL_MEM_WRITE_ONLY, config->vector_size, NULL, NULL);
+	config->d_k2 = clCreateBuffer(config->_cl_context, CL_MEM_READ_WRITE, config->vector_size, NULL, NULL);
+	config->d_k3 = clCreateBuffer(config->_cl_context, CL_MEM_READ_WRITE, config->vector_size, NULL, NULL);
+	config->d_k4 = clCreateBuffer(config->_cl_context, CL_MEM_READ_WRITE, config->vector_size, NULL, NULL);
 
 	// prepare constant memory
 	config->d_c_model = clCreateBuffer(config->_cl_context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(config->model), &config->model, NULL);
@@ -157,6 +160,9 @@ void gpu_delete_buffers(gpu_config_t *config)
 	// clReleaseMemObject(config->h_v);
 	clReleaseMemObject(config->d_v);
 	clReleaseMemObject(config->d_dv);
+	clReleaseMemObject(config->d_k2);
+	clReleaseMemObject(config->d_k3);
+	clReleaseMemObject(config->d_k4);
 	clReleaseMemObject(config->d_p_cuboid);
 	clReleaseMemObject(config->d_c_model);
 	clReleaseMemObject(config->d_c_layer);

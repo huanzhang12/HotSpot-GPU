@@ -72,7 +72,7 @@ void sum_col(__global double *v, int nl, int nr, int nc, __local double *local_r
 	}
 }
 
-__kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model, __constant gpu_layer_t *l, __global double *v, __global double *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local double *local_result)
+__kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model, __constant gpu_layer_t *l, __global double *v, __global double *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local double *local_result, __local double *x)
 {
 
 	/* sum of the currents(power values)	*/
@@ -93,8 +93,8 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model, __constant g
 	unsigned int nl_nr_nc_product = mul24(nl, nr) * nc;
 	int spidx, hsidx, metalidx, c4idx, subidx, solderidx, pcbidx;
 	
-	/* pointer to the starting address of the extra nodes	*/
-	__global double *x = v + nl_nr_nc_product;
+	/* pointer to the starting address of the extra nodes (now passed as an argument)	*/
+	// __global double *x = v + nl_nr_nc_product;
 
 	unsigned int block_id = mad24(get_group_id(1), get_num_groups(0), get_group_id(0));
 	unsigned int thread_id = mad24(get_global_id(1), get_global_size(0), get_global_id(0));
@@ -515,6 +515,19 @@ void load_v_to_shared(__global double *v, __local double * v_cached_layer, int n
 	barrier(CLK_LOCAL_MEM_FENCE);
 }
 
+void load_extra_to_shared(__global double *x, __local double * extra_cached, int n)
+{
+	int id = mad24(get_local_id(1), get_local_size(0), get_local_id(0)); // row (row-major)
+	int stride = mul24(get_local_size(1), get_local_size(0));
+	int i;
+	for (i = 0; i < n; i += stride) {
+		if (i + id < n) {
+			extra_cached[i + id] = x[i + id];
+		}
+	}
+	barrier(CLK_LOCAL_MEM_FENCE);
+}
+
 /*  Test correctness of local memory caching */
 __kernel void slope_fn_grid_gpu_test(__constant gpu_grid_model_t *model, __constant gpu_layer_t *l, __global double *v, __global double *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local double *local_result, __global double *p_cuboid)
 {
@@ -535,7 +548,7 @@ __kernel void slope_fn_grid_gpu_test(__constant gpu_grid_model_t *model, __const
 	double ambient = model->config.ambient;
 	double s_pcb = model->config.s_pcb;
 	/* pointer to the starting address of the extra nodes	*/
-	__global double *x = v + mul24(nl, nr) * nc;
+	// __global double *x = v + mul24(nl, nr) * nc;
 
 	/* local memory cached v[] (4 layers maximum) */
 	__local double * v_cached[4];
@@ -549,11 +562,12 @@ __kernel void slope_fn_grid_gpu_test(__constant gpu_grid_model_t *model, __const
 		load_v_to_shared(v, v_cached[n], n, nl, nr, nc);
 	}
 	uint next_layer = n - 1;
-	// for local memory access
+	/* for local memory access */
 	int i_s = get_local_id(1) + 1;
 	int j_s = get_local_id(0) + 1;
 	int nr_s = get_local_size(1) + 2;
 	int nc_s = get_local_size(0) + 2;
+
 	
 	for(n=0; n < nl; n++) {
 		bool load_next_layer = (n == next_layer) && (next_layer + 1 < nl);
@@ -598,7 +612,7 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model, __constant g
 	double ambient = model->config.ambient;
 	double s_pcb = model->config.s_pcb;
 	/* pointer to the starting address of the extra nodes	*/
-	__global double *x = v + mul24(nl, nr) * nc;
+	// __global double *x = v + mul24(nl, nr) * nc;
 
 	/* local memory cached v[] (4 layers maximum) */
 	__local double * v_cached[4];
@@ -607,16 +621,20 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model, __constant g
 	v_cached[1] = local_result + n;
 	v_cached[2] = v_cached[1] + n;
 	v_cached[3] = v_cached[2] + n;
+	/* local memory cached extra nodes */
+	__local double * x = v_cached[3] + n;
 	/* load the first 4 layers */
 	for(n=0; n < min(nl, 0x4u); n++) {
 		load_v_to_shared(v, v_cached[n], n, nl, nr, nc);
 	}
 	uint next_layer = n - 1;
-	// for local memory access
+	/* for local memory access */
 	int i_s = get_local_id(1) + 1;
 	int j_s = get_local_id(0) + 1;
 	int nr_s = get_local_size(1) + 2;
 	int nc_s = get_local_size(0) + 2;
+	/* load extra nodes to local memory */
+	load_extra_to_shared(v + mul24(nl, nr) * nc, x, model_secondary ? (EXTRA + EXTRA_SEC) : (EXTRA));
 	
 	if (!model_secondary) {
 		spidx = nl - DEFAULT_PACK_LAYERS + LAYER_SP;
@@ -771,6 +789,6 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model, __constant g
 		/* update the current cell's temperature	*/	   
 		A3D(dv,n,i,j,nl,nr,nc) = (A3D(p_cuboid,n,i,j,nl,nr,nc) + psum) / l[n].c;
 	}
-	slope_fn_pack_gpu(model, l, v, dv, nl, nr, nc, local_result);
+	slope_fn_pack_gpu(model, l, v, dv, nl, nr, nc, local_result, x);
 }
 

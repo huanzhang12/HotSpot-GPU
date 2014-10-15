@@ -1,6 +1,13 @@
 #ifndef __GPU_RK4_H
 #define __GPU_RK4_H
 
+/* number of extra nodes due to the model:
+ * 4 spreader nodes, 4 heat sink nodes under
+ * the spreader (center), 4 peripheral heat
+ * sink nodes (north, south, east and west)
+ * and a separate node for the ambient
+ */
+#define EXTRA		12
 /* spreader nodes	*/
 #define	SP_W		0
 #define	SP_E		1
