@@ -515,6 +515,7 @@ void load_v_to_shared(__global double *v, __local double * v_cached_layer, int n
 	barrier(CLK_LOCAL_MEM_FENCE);
 }
 
+/*  Test correctness of local memory caching */
 __kernel void slope_fn_grid_gpu_test(__constant gpu_grid_model_t *model, __constant gpu_layer_t *l, __global double *v, __global double *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local double *local_result, __global double *p_cuboid)
 {
 	int n;
@@ -554,7 +555,6 @@ __kernel void slope_fn_grid_gpu_test(__constant gpu_grid_model_t *model, __const
 	int nr_s = get_local_size(1) + 2;
 	int nc_s = get_local_size(0) + 2;
 	
-	// A3D(v,0,i,j,nl,nr,nc) = A3D(v_cached[0],0,i_s,j_s,nl,nr_s,nc_s);
 	for(n=0; n < nl; n++) {
 		bool load_next_layer = (n == next_layer) && (next_layer + 1 < nl);
 		double psum = 0.0;
@@ -563,6 +563,7 @@ __kernel void slope_fn_grid_gpu_test(__constant gpu_grid_model_t *model, __const
 			++next_layer;
 			load_v_to_shared(v, v_cached[next_layer & 0x3], next_layer, nl, nr, nc);
 		}
+		/* we expect psum  = 0 */
 		psum = 	(NP(l,v,n,i,j,nl,nr,nc) - NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s)) + 
 			(SP(l,v,n,i,j,nl,nr,nc) - SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s)) + 
 			(WP(l,v,n,i,j,nl,nr,nc) - WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s)) + 
@@ -639,52 +640,58 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model, __constant g
 			++next_layer;
 			load_v_to_shared(v, v_cached[next_layer & 0x3], next_layer, nl, nr, nc);
 		}
-		if (n==LAYER_SI && model_secondary) { //top silicon layer
+		if (model_secondary) {
+			if (n==LAYER_SI) { //top silicon layer
+				psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+				   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+				   ((A3D(v,metalidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[metalidx].rz) +
+				   ((A3D(v,n+1,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
+			} else if (n==spidx) { //spreader layer
+				psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+				   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+				   ((A3D(v,metalidx-1,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[metalidx-1].rz) +
+				   ((A3D(v,hsidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
+			} else if (n==metalidx) { //metal layer
+				psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+				   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+				   ((A3D(v,c4idx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[c4idx].rz) +
+				   ((A3D(v,LAYER_SI,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
+			} else if (n==metalidx-1) { // TIM layer
+				psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+				   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+				   ((A3D(v,metalidx-2,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[metalidx-2].rz) +
+				   ((A3D(v,spidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
+			} else if (n==c4idx) { //C4 layer
+				psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+				   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+				   ((A3D(v,subidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[subidx].rz) +
+				   ((A3D(v,metalidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
+			} else if (n==subidx) { //Substrate layer
+				psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+				   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+				   ((A3D(v,solderidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[solderidx].rz) +
+				   ((A3D(v,c4idx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
+			} else if (n==pcbidx) { //PCB layer
+				psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+				   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+				   ((A3D(v,solderidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
+			} else if (n==hsidx) { // heatsink layer
+				psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+				   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+				   ((A3D(v,spidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[spidx].rz);
+			} else {
+				/* sum the currents(power values) to cells north, south, 
+			 	* east, west, above and below
+			 	*/	
+				psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+				   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+				   AP(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + BP(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s);
+			}
+		}
+		else {
 			psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-			   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-			   ((A3D(v,metalidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[metalidx].rz) +
-			   ((A3D(v,n+1,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
-		} else if (n==spidx && model_secondary) { //spreader layer
-			psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-			   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-			   ((A3D(v,metalidx-1,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[metalidx-1].rz) +
-			   ((A3D(v,hsidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
-		} else if (n==metalidx && model_secondary) { //metal layer
-			psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-			   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-			   ((A3D(v,c4idx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[c4idx].rz) +
-			   ((A3D(v,LAYER_SI,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
-		} else if (n==metalidx-1 && model_secondary) { // TIM layer
-			psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-			   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-			   ((A3D(v,metalidx-2,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[metalidx-2].rz) +
-			   ((A3D(v,spidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
-		} else if (n==c4idx && model_secondary) { //C4 layer
-			psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-			   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-			   ((A3D(v,subidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[subidx].rz) +
-			   ((A3D(v,metalidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
-		} else if (n==subidx && model_secondary) { //Substrate layer
-			psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-			   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-			   ((A3D(v,solderidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[solderidx].rz) +
-			   ((A3D(v,c4idx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
-		} else if (n==pcbidx && model_secondary) { //PCB layer
-			psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-			   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-			   ((A3D(v,solderidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
-		} else if (n==hsidx && model_secondary) { // heatsink layer
-			psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-			   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-			   ((A3D(v,spidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[spidx].rz);
-		} else {
-			/* sum the currents(power values) to cells north, south, 
-		 	* east, west, above and below
-		 	*/
-			
-			psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-			   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-			   AP(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + BP(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s);
+				   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
+				   AP(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + BP(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s);
 		}
 
 		/* spreader core is connected to its periphery	*/
