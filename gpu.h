@@ -22,6 +22,7 @@ typedef struct gpu_config_t_st
 	cl_context _cl_context;
 	cl_program _cl_program;
 	cl_kernel _cl_kernel_rk4;
+	cl_kernel _cl_kernel_average;
 	cl_command_queue _cl_queue;
 
 	/* memories */
@@ -33,7 +34,7 @@ typedef struct gpu_config_t_st
 	void* pinned_h_result;
 	cl_mem d_v;
 	cl_mem d_dv;
-	cl_mem d_k2, d_k3, d_k4;
+	cl_mem d_k1, d_k2, d_k3, d_k4;
 	cl_mem d_p_cuboid;
 	cl_mem d_c_model;
 	cl_mem d_c_layer;
@@ -65,6 +66,7 @@ void gpu_create_buffers(gpu_config_t *config, grid_model_t *model);
 void gpu_delete_buffers(gpu_config_t *config);
 
 double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, double *h, double *yout);
+void rk4_core_gpu_kernel(gpu_config_t *config, void *model, double *y, double *k1, void *p, int n, double h, double *yout);
 void rk4_core_gpu(gpu_config_t *config, void *model, double *y, double *k1, void *p, int n, double h, double *yout);
 void slope_fn_grid_gpu_kernel(gpu_config_t *config, grid_model_t *model, double *v, grid_model_vector_t *p, double *dv);
 void slope_fn_grid_gpu(gpu_config_t *config, grid_model_t *model, double *v, grid_model_vector_t *p, double *dv);
