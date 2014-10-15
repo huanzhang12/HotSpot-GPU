@@ -47,6 +47,7 @@ __kernel void rk4_average(__global double *y, __global double *k1, __global doub
 
 	for(n = 0; n < nl; n++) {
 		A3D(yout,n,i,j,nl,nr,nc) = mad(h, (mad(2.0, A3D(k2,n,i,j,nl,nr,nc), A3D(k1,n,i,j,nl,nr,nc)) + mad(2.0, A3D(k3,n,i,j,nl,nr,nc), A3D(k4,n,i,j,nl,nr,nc))) / 6.0, A3D(y,n,i,j,nl,nr,nc));
+		// A3D(yout,n,i,j,nl,nr,nc) = A3D(y,n,i,j,nl,nr,nc) + h * (A3D(k1,n,i,j,nl,nr,nc) + 2.0 * A3D(k2,n,i,j,nl,nr,nc) + 2.0 * A3D(k3,n,i,j,nl,nr,nc) + A3D(k4,n,i,j,nl,nr,nc)) / 6.0;
 	}
 
 	/* extra nodes */
@@ -65,6 +66,7 @@ __kernel void rk4_average(__global double *y, __global double *k1, __global doub
 		for (i = 0; i < extra_count; i += stride) {
 			if (i + id < extra_count) {
 				yout[i + id] = mad(h, (mad(2.0, k2[i + id], k1[i + id]) + mad(2.0, k3[i + id], k4[i + id])) / 6.0, y[i + id]);
+				// yout[i + id] = y[i + id] + h * (k1[i + id] + 2.0 * k2[i + id] + 2.0 * k3[i + id] + k4[i + id]) / 6.0;
 			}
 		}
 	}
@@ -547,12 +549,12 @@ void load_v_to_shared(__global double *v, __local double * v_cached_layer, int n
 }
 
 /* load v = y + k * h into local memory */
-void load_v_to_shared_with_endpoint(__global double *y, __global double *k, double h, __local double * v_cached_layer, int n, unsigned int nl, unsigned int nr, unsigned int nc)
+void load_v_to_shared_with_endpoint(__global double *y, __global double *k, double h, __local double * v_cached_layer, int n, unsigned int nl, unsigned int nr, unsigned int nc, __global double *v, bool model_secondary)
 {
 	int i = get_global_id(1); // row (row-major)
 	int j = get_global_id(0); // column
 	int index = mad24(get_local_id(1) + 1, get_local_size(0) + 2, get_local_id(0) + 1);
-	double v_value = mad(h, A3D(k,n,i,j,nl,nr,nc), A3D(k,n,i,j,nl,nr,nc));
+	double v_value = mad(h, A3D(k,n,i,j,nl,nr,nc), A3D(y,n,i,j,nl,nr,nc));
 	v_cached_layer[index] = v_value; // local location: row = get_local_id(1)+1, column = get_local_id(0)+1
 	/* use the first and last worker rows to retrive the first and last extra rows */
 	if (get_local_id(1) == 0) {
@@ -571,6 +573,12 @@ void load_v_to_shared_with_endpoint(__global double *y, __global double *k, doub
 	if (get_local_id(0) == get_local_size(0) - 1) {
 		index = mad24(get_local_id(1) + 1, get_local_size(0) + 2, get_local_size(0) + 1);
 		v_cached_layer[index] = (j < nc-1) ? mad(h, A3D(k,n,i,j+1,nl,nr,nc), A3D(y,n,i,j+1,nl,nr,nc)) : v_value;
+	}
+	/* we have to save the boundaries of up to 5 layers to global memory since slope_fn_pack_gpu() will use them  */
+	/* if we need to model secondary path, all layers have to been saved to v[] */
+	bool save_to_global = (i == 0) || (j == 0) || (i == nr - 1) || (j == nc - 1) || model_secondary;
+	if (save_to_global) {
+		A3D(v,n,i,j,nl,nr,nc) = v_value;
 	}
 	barrier(CLK_LOCAL_MEM_FENCE);
 }
@@ -668,7 +676,7 @@ __kernel void slope_fn_grid_gpu_test(__constant gpu_grid_model_t *model, __const
  * equation is CdV + sum{(T - Ti)/Ri} = P 
  * so, slope = dV = [P + sum{(Ti-T)/Ri}]/C
  */
-__kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model, __constant gpu_layer_t *l, __global double *v, __global double *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local double *local_result, __global double *p_cuboid, double h, __global double *k)
+__kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model, __constant gpu_layer_t *l, __global double *v, __global double *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local double *local_result, __global double *p_cuboid, double h, __global double *k, __global double *y)
 {
 	int n;
 	int i = get_global_id(1); // row (row-major)
@@ -703,10 +711,12 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model, __constant g
 	__local double * x = v_cached[3] + n;
 	/* load the first 4 layers */
 	for(n=0; n < min(nl, 0x4u); n++) {
-		if (do_endpoint)
+		if (do_endpoint) {
+			load_v_to_shared_with_endpoint(y, k, h, v_cached[n], n, nl, nr, nc, v, model_secondary); // v = y + k * h
+		}
+		else {
 			load_v_to_shared(v, v_cached[n], n, nl, nr, nc);
-		else
-			load_v_to_shared_with_endpoint(v, k, h, v_cached[n], n, nl, nr, nc); // v + k * h
+		}
 	}
 	uint next_layer = n - 1;
 	/* for local memory access */
@@ -715,10 +725,12 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model, __constant g
 	int nr_s = get_local_size(1) + 2;
 	int nc_s = get_local_size(0) + 2;
 	/* load extra nodes to local memory */
-	if (do_endpoint)
+	if (do_endpoint) {
+		load_extra_to_shared_with_endpoint(y + mul24(nl, nr) * nc, k + mul24(nl, nr) * nc, h, x, model_secondary ? (EXTRA + EXTRA_SEC) : (EXTRA));
+	}
+	else {
 		load_extra_to_shared(v + mul24(nl, nr) * nc, x, model_secondary ? (EXTRA + EXTRA_SEC) : (EXTRA));
-	else
-		load_extra_to_shared_with_endpoint(v + mul24(nl, nr) * nc, k + mul24(nl, nr) * nc, h, x, model_secondary ? (EXTRA + EXTRA_SEC) : (EXTRA));
+	}
 	
 	if (!model_secondary) {
 		spidx = nl - DEFAULT_PACK_LAYERS + LAYER_SP;
@@ -740,10 +752,12 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model, __constant g
 		int n_s = n & 3;
 		if (load_next_layer) {
 			++next_layer;
-			if (do_endpoint)
+			if (do_endpoint) {
+				load_v_to_shared_with_endpoint(y, k, h, v_cached[next_layer & 0x3], next_layer, nl, nr, nc, v, model_secondary); // v + k * h
+			}
+			else {
 				load_v_to_shared(v, v_cached[next_layer & 0x3], next_layer, nl, nr, nc);
-			else
-				load_v_to_shared_with_endpoint(v, k, h, v_cached[next_layer & 0x3], next_layer, nl, nr, nc); // v + k * h
+			}
 		}
 		if (model_secondary) {
 			if (n==LAYER_SI) { //top silicon layer
