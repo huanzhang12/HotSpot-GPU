@@ -40,34 +40,12 @@ __kernel void rk4(__global float4* data,
 // #define A3D(array,n,i,j,nl,nr,nc)		(array[(n)*(nr)*(nc) + (i)*(nc) + (j)])
 #define A3D(array,n,i,j,nl,nr,nc)		(array[(nr)*mul24((int)(n), (int)(nc)) + mad24((int)(i), (int)(nc), (int)(j))])
 
-__kernel void rk4_average(__global double *y, __global double *k1, __global double *k2, __global double *k3, __global double *k4, double h, __global double *yout, unsigned int nl, unsigned int nr, unsigned int nc, unsigned int extra_count) {
-	int i = get_global_id(1);
-	int j = get_global_id(0);
-	int n;
-
-	for(n = 0; n < nl; n++) {
-		A3D(yout,n,i,j,nl,nr,nc) = mad(h, (mad(2.0, A3D(k2,n,i,j,nl,nr,nc), A3D(k1,n,i,j,nl,nr,nc)) + mad(2.0, A3D(k3,n,i,j,nl,nr,nc), A3D(k4,n,i,j,nl,nr,nc))) / 6.0, A3D(y,n,i,j,nl,nr,nc));
-		// A3D(yout,n,i,j,nl,nr,nc) = A3D(y,n,i,j,nl,nr,nc) + h * (A3D(k1,n,i,j,nl,nr,nc) + 2.0 * A3D(k2,n,i,j,nl,nr,nc) + 2.0 * A3D(k3,n,i,j,nl,nr,nc) + A3D(k4,n,i,j,nl,nr,nc)) / 6.0;
-	}
-
-	/* extra nodes */
-	uint group_id = mad24(get_group_id(1), get_num_groups(0), get_group_id(0));
-	uint extra_offset = nc * mul24(nl, nr);
-	y += extra_offset;
-	k1 += extra_offset;
-	k2 += extra_offset;
-	k3 += extra_offset;
-	k4 += extra_offset;
-	yout += extra_offset;
-	if(group_id == 0) {
-		int id = mad24(get_local_id(1), get_local_size(0), get_local_id(0));
-		int stride = mul24(get_local_size(1), get_local_size(0));
-		int i;
-		for (i = 0; i < extra_count; i += stride) {
-			if (i + id < extra_count) {
-				yout[i + id] = mad(h, (mad(2.0, k2[i + id], k1[i + id]) + mad(2.0, k3[i + id], k4[i + id])) / 6.0, y[i + id]);
-				// yout[i + id] = y[i + id] + h * (k1[i + id] + 2.0 * k2[i + id] + 2.0 * k3[i + id] + k4[i + id]) / 6.0;
-			}
+__kernel void rk4_average(__global double *y, __global double *k1, __global double *k2, __global double *k3, __global double *k4, double h, __global double *yout, unsigned int n) {
+	int id = get_global_id(0);
+	int stride = get_global_size(0);
+	for(int i = 0; i < n; i += stride) {
+		if (i + id < n) {
+			yout[i + id] = mad(h, (mad(2.0, k2[i + id], k1[i + id]) + mad(2.0, k3[i + id], k4[i + id])) / 6.0, y[i + id]);
 		}
 	}
 }

@@ -274,11 +274,8 @@ void gpu_init(gpu_config_t *config, grid_model_t *model)
 	err |= clSetKernelArg(config->_cl_kernel_average, 4, sizeof(cl_mem), &config->d_k4);
 	// the 5th argument is h
 	err |= clSetKernelArg(config->_cl_kernel_average, 6, sizeof(cl_mem), &config->d_dv);
-	err |= clSetKernelArg(config->_cl_kernel_average, 7, sizeof(model->n_layers), &model->n_layers);
-	err |= clSetKernelArg(config->_cl_kernel_average, 8, sizeof(model->rows), &model->rows);
-	err |= clSetKernelArg(config->_cl_kernel_average, 9, sizeof(model->cols), &model->cols);
-	int extra_size = config->extra_size / config->element_size;
-	err |= clSetKernelArg(config->_cl_kernel_average, 10, sizeof(extra_size), &extra_size);
+	int vector_size = config->vector_size / config->element_size;
+	err |= clSetKernelArg(config->_cl_kernel_average, 7, sizeof(vector_size), &vector_size);
 	gpu_check_error(err, "Couldn't setup a OpenCL kernel argument for rk4_average()");
 
 	// Setup kernel dimensions
@@ -551,7 +548,9 @@ void rk4_core_gpu_kernel(gpu_config_t *config, void *model, double *y, double *k
 	//	yout[i] = y[i] + h * (k1[i] + 2*k2[i] + 2*k3[i] + k4[i])/6.0;
 	err = clSetKernelArg(config->_cl_kernel_average, 5, sizeof(h_real), &h_real);
 	gpu_check_error(err, "Couldn't setup a OpenCL kernel argument in rk4_average()");
-	err = clEnqueueNDRangeKernel(config->_cl_queue, config->_cl_kernel_average, 2, NULL, config->global_work_size, config->local_work_size, 0, NULL, NULL);
+	size_t avg_kernel_global_size = config->global_work_size[0] * config->global_work_size[1];
+	size_t avg_kernel_local_size = config->local_work_size[0] * config->local_work_size[1];
+	err = clEnqueueNDRangeKernel(config->_cl_queue, config->_cl_kernel_average, 1, NULL, &avg_kernel_global_size, &avg_kernel_local_size, 0, NULL, NULL);
 	gpu_check_error(err, "Cannot launch kernel rk4_average()!");
 
 	// copy result back
