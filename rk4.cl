@@ -549,38 +549,42 @@ void load_v_to_shared(__global double *v, __local double * v_cached_layer, int n
 }
 
 /* load v = y + k * h into local memory */
-void load_v_to_shared_with_endpoint(__global double *y, __global double *k, double h, __local double * v_cached_layer, int n, unsigned int nl, unsigned int nr, unsigned int nc, __global double *v, bool model_secondary)
+void load_v_to_shared_with_endpoint(__global double *y, __global double *k, double h, __local double * v_cached_layer, int n, unsigned int nl, unsigned int nr, unsigned int nc, __global double *v, bool save_to_local, bool save_to_global)
 {
 	int i = get_global_id(1); // row (row-major)
 	int j = get_global_id(0); // column
-	int index = mad24(get_local_id(1) + 1, get_local_size(0) + 2, get_local_id(0) + 1);
 	double v_value = mad(h, A3D(k,n,i,j,nl,nr,nc), A3D(y,n,i,j,nl,nr,nc));
-	v_cached_layer[index] = v_value; // local location: row = get_local_id(1)+1, column = get_local_id(0)+1
-	/* use the first and last worker rows to retrive the first and last extra rows */
-	if (get_local_id(1) == 0) {
-		index = get_local_id(0) + 1;
-		v_cached_layer[index] = (i > 0) ? mad(h, A3D(k,n,i-1,j,nl,nr,nc), A3D(y,n,i-1,j,nl,nr,nc)) : v_value;
-	}
-	if (get_local_id(1) == get_local_size(1) - 1) {
-		index = mad24(get_local_size(1) + 1, get_local_size(0) + 2, get_local_id(0) + 1);
-		v_cached_layer[index] = (i < nr-1) ? mad(h, A3D(k,n,i+1,j,nl,nr,nc), A3D(y,n,i+1,j,nl,nr,nc)) : v_value;
-	}
-	/* use the first and last worker columns to retrive the first and last extra columns */
-	if (get_local_id(0) == 0) {
-		index = mul24(get_local_id(1) + 1, get_local_size(0) + 2);
-		v_cached_layer[index] = (j > 0) ? mad(h, A3D(k,n,i,j-1,nl,nr,nc), A3D(y,n,i,j-1,nl,nr,nc)) : v_value;
-	}
-	if (get_local_id(0) == get_local_size(0) - 1) {
-		index = mad24(get_local_id(1) + 1, get_local_size(0) + 2, get_local_size(0) + 1);
-		v_cached_layer[index] = (j < nc-1) ? mad(h, A3D(k,n,i,j+1,nl,nr,nc), A3D(y,n,i,j+1,nl,nr,nc)) : v_value;
+	if (save_to_local) {
+		int index = mad24(get_local_id(1) + 1, get_local_size(0) + 2, get_local_id(0) + 1);
+		v_cached_layer[index] = v_value; // local location: row = get_local_id(1)+1, column = get_local_id(0)+1
+		/* use the first and last worker rows to retrive the first and last extra rows */
+		if (get_local_id(1) == 0) {
+			index = get_local_id(0) + 1;
+			v_cached_layer[index] = (i > 0) ? mad(h, A3D(k,n,i-1,j,nl,nr,nc), A3D(y,n,i-1,j,nl,nr,nc)) : v_value;
+		}
+		if (get_local_id(1) == get_local_size(1) - 1) {
+			index = mad24(get_local_size(1) + 1, get_local_size(0) + 2, get_local_id(0) + 1);
+			v_cached_layer[index] = (i < nr-1) ? mad(h, A3D(k,n,i+1,j,nl,nr,nc), A3D(y,n,i+1,j,nl,nr,nc)) : v_value;
+		}
+		/* use the first and last worker columns to retrive the first and last extra columns */
+		if (get_local_id(0) == 0) {
+			index = mul24(get_local_id(1) + 1, get_local_size(0) + 2);
+			v_cached_layer[index] = (j > 0) ? mad(h, A3D(k,n,i,j-1,nl,nr,nc), A3D(y,n,i,j-1,nl,nr,nc)) : v_value;
+		}
+		if (get_local_id(0) == get_local_size(0) - 1) {
+			index = mad24(get_local_id(1) + 1, get_local_size(0) + 2, get_local_size(0) + 1);
+			v_cached_layer[index] = (j < nc-1) ? mad(h, A3D(k,n,i,j+1,nl,nr,nc), A3D(y,n,i,j+1,nl,nr,nc)) : v_value;
+		}
 	}
 	/* we have to save the boundaries of up to 5 layers to global memory since slope_fn_pack_gpu() will use them  */
 	/* if we need to model secondary path, all layers have to been saved to v[] */
-	bool save_to_global = (i == 0) || (j == 0) || (i == nr - 1) || (j == nc - 1) || model_secondary;
-	if (save_to_global) {
+	bool save_to_global_cond = (i == 0) || (j == 0) || (i == nr - 1) || (j == nc - 1) || save_to_global;
+	if (save_to_global_cond) {
 		A3D(v,n,i,j,nl,nr,nc) = v_value;
 	}
-	barrier(CLK_LOCAL_MEM_FENCE);
+	if (save_to_local) {
+		barrier(CLK_LOCAL_MEM_FENCE);
+	}
 }
 
 
@@ -712,11 +716,18 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model, __constant g
 	/* load the first 4 layers */
 	for(n=0; n < min(nl, 0x4u); n++) {
 		if (do_endpoint) {
-			load_v_to_shared_with_endpoint(y, k, h, v_cached[n], n, nl, nr, nc, v, model_secondary); // v = y + k * h
+			// we only need these layers to be saved to global memory when secondary model is enabled, because the cache is not large enough to hold all layers
+			bool save_to_global = model_secondary && ((n == metalidx-1) || (n == subidx) || (n == c4idx));
+			load_v_to_shared_with_endpoint(y, k, h, v_cached[n], n, nl, nr, nc, v, 1, save_to_global); // v = y + k * h
 		}
 		else {
 			load_v_to_shared(v, v_cached[n], n, nl, nr, nc);
 		}
+	}
+	bool preload_spidx = do_endpoint && model_secondary;
+	if (preload_spidx) {
+		// compute layer spidx and save it to global memory. This layer will be used by secondary model before it is loaded into local (and global) memory.
+		load_v_to_shared_with_endpoint(y, k, h, v_cached[0], spidx, nl, nr, nc, v, 0, 1); // v = y + k * h
 	}
 	uint next_layer = n - 1;
 	/* for local memory access */
@@ -753,51 +764,52 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model, __constant g
 		if (load_next_layer) {
 			++next_layer;
 			if (do_endpoint) {
-				load_v_to_shared_with_endpoint(y, k, h, v_cached[next_layer & 0x3], next_layer, nl, nr, nc, v, model_secondary); // v + k * h
+				bool save_to_global = model_secondary && ((n == metalidx-1) || (n == subidx) || (n == c4idx));
+				load_v_to_shared_with_endpoint(y, k, h, v_cached[next_layer & 0x3], next_layer, nl, nr, nc, v, 1, save_to_global); // v + k * h
 			}
 			else {
 				load_v_to_shared(v, v_cached[next_layer & 0x3], next_layer, nl, nr, nc);
 			}
 		}
 		if (model_secondary) {
-			if (n==LAYER_SI) { //top silicon layer
+			if (n==LAYER_SI) { //top silicon layer (layer 0, requires layer 2, 1)
 				psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
 				   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-				   ((A3D(v,metalidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[metalidx].rz) +
-				   ((A3D(v,n+1,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
-			} else if (n==spidx) { //spreader layer
+				   ((A3D(v_cached[0],((n_s+2) & 3),i_s,j_s,nl_s,nr_s,nc_s)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[metalidx].rz) + // metalidx
+				   ((A3D(v_cached[0],((n_s+1) & 3),i_s,j_s,nl_s,nr_s,nc_s)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz); // n+1
+			} else if (n==spidx) { //spreader layer (4, requires layer 1, 5)
 				psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
 				   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-				   ((A3D(v,metalidx-1,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[metalidx-1].rz) +
-				   ((A3D(v,hsidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
-			} else if (n==metalidx) { //metal layer
+				   ((A3D(v,metalidx-1,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[metalidx-1].rz) + // must load from global memory (OK)
+				   ((A3D(v_cached[0],((n_s+1) & 3),i_s,j_s,nl_s,nr_s,nc_s)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz); // hsidx
+			} else if (n==metalidx) { //metal layer (2, requires layer 3, 0)
 				psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
 				   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-				   ((A3D(v,c4idx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[c4idx].rz) +
-				   ((A3D(v,LAYER_SI,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
-			} else if (n==metalidx-1) { // TIM layer
+				   ((A3D(v_cached[0],((n_s+1) & 3),i_s,j_s,nl_s,nr_s,nc_s)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[c4idx].rz) + // c4idx
+				   ((A3D(v_cached[0],((n_s-2) & 3),i_s,j_s,nl_s,nr_s,nc_s)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz); // LAYER_SI
+			} else if (n==metalidx-1) { // TIM layer (1, requires layer 0, 4)
 				psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
 				   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-				   ((A3D(v,metalidx-2,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[metalidx-2].rz) +
-				   ((A3D(v,spidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
-			} else if (n==c4idx) { //C4 layer
+				   ((A3D(v_cached[0],((n_s-1) & 3),i_s,j_s,nl_s,nr_s,nc_s)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[metalidx-2].rz) + // metalidx-2
+				   ((A3D(v,spidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz); // must load from global memory (need it early)
+			} else if (n==c4idx) { //C4 layer (3, requires layer 6, 2)
 				psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
 				   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-				   ((A3D(v,subidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[subidx].rz) +
-				   ((A3D(v,metalidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
-			} else if (n==subidx) { //Substrate layer
+				   ((A3D(v,subidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[subidx].rz) + // must load from global memory (OK)
+				   ((A3D(v_cached[0],((n_s-1) & 3),i_s,j_s,nl_s,nr_s,nc_s)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz); // metalidx
+			} else if (n==subidx) { //Substrate layer (6, requires layer 7, 3)
 				psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
 				   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-				   ((A3D(v,solderidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[solderidx].rz) +
-				   ((A3D(v,c4idx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
-			} else if (n==pcbidx) { //PCB layer
+				   ((A3D(v_cached[0],((n_s+1) & 3),i_s,j_s,nl_s,nr_s,nc_s)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[solderidx].rz) + // solderidx
+				   ((A3D(v,c4idx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz); // must load from global memory (OK)
+			} else if (n==pcbidx) { //PCB layer (8, requires layer 7)
 				psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
 				   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-				   ((A3D(v,solderidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz);
-			} else if (n==hsidx) { // heatsink layer
+				   ((A3D(v_cached[0],((n_s-1) & 3),i_s,j_s,nl_s,nr_s,nc_s)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz); // solderidx
+			} else if (n==hsidx) { // heatsink layer (5, requires layer 4)
 				psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
 				   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-				   ((A3D(v,spidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[spidx].rz);
+				   ((A3D(v_cached[0],((n_s-1) & 3),i_s,j_s,nl_s,nr_s,nc_s)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[spidx].rz); // spidx
 			} else {
 				/* sum the currents(power values) to cells north, south, 
 			 	* east, west, above and below
