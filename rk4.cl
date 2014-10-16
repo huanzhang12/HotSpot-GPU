@@ -50,15 +50,14 @@ __kernel void rk4_average(__global double *y, __global double *k1, __global doub
 }
 
 __kernel void rk4_average_with_maxdiff(__global double *y, __global double *k1, __global double *k2, __global double *k3, __global double *k4, double h, __global double *yout, unsigned int n, __global double *ytemp,  __local double *local_result) {
-	int stride = get_global_size(0) * 2;
+	int stride = get_global_size(0);
 	int local_size = get_local_size(0);
 	int local_id = get_local_id(0);
-	int id = get_group_id(0) * get_local_size(0) * 2 + get_local_id(0);
+	int id = get_global_id(0);
 	double private_max = 0.0;
 	for(int i = id; i < n; i += stride) {
-		double yout_value_1 = mad(h, (mad(2.0, k2[i], k1[i]) + mad(2.0, k3[i], k4[i])) / 6.0, y[i]);
-		double yout_value_2 = mad(h, (mad(2.0, k2[i+local_size], k1[i+local_size]) + mad(2.0, k3[i+local_size], k4[i+local_size])) / 6.0, y[i+local_size]);
-		private_max = max(private_max, max(fabs(ytemp[i] - yout_value_1), fabs(ytemp[i+local_size] - yout_value_2)));
+		double yout_value = mad(h, (mad(2.0, k2[i], k1[i]) + mad(2.0, k3[i], k4[i])) / 6.0, y[i]);
+		private_max = max(private_max, fabs(ytemp[i] - yout_value));
 	}
 	local_result[local_id] = private_max;
 	barrier(CLK_LOCAL_MEM_FENCE);
@@ -73,15 +72,15 @@ __kernel void rk4_average_with_maxdiff(__global double *y, __global double *k1, 
 }
 
 __kernel void max_reduce(__global double *y, unsigned int n, __local double *local_result) {
-	int stride = get_global_size(0) * 2;
+	int stride = get_global_size(0);
 	int local_size = get_local_size(0);
 	int local_id = get_local_id(0);
-	int id = get_group_id(0) * get_local_size(0) * 2 + get_local_id(0);
+	int id = get_global_id(0);
 	double private_max = 0.0;
 	for(int i = id; i < n; i += stride) {
-		// do first level reduction here
-		private_max = max(private_max, max(y[i + local_size], y[i]));
+		private_max = max(private_max, y[i]);
 	}
+	local_result[local_id] = private_max;
 	barrier(CLK_LOCAL_MEM_FENCE);
 	// TODO: unroll this loop
 	for (int i = local_size>>1; i > 0; i >>= 1) {

@@ -145,6 +145,7 @@ void gpu_create_buffers(gpu_config_t *config, grid_model_t *model)
 	config->d_dv = clCreateBuffer(config->_cl_context, CL_MEM_WRITE_ONLY, config->vector_size, NULL, NULL);
 	config->d_p_cuboid = clCreateBuffer(config->_cl_context, CL_MEM_WRITE_ONLY, config->vector_size, NULL, NULL);
 	config->d_y = clCreateBuffer(config->_cl_context, CL_MEM_READ_WRITE, config->vector_size, NULL, NULL);
+	config->d_ytemp = clCreateBuffer(config->_cl_context, CL_MEM_READ_WRITE, config->vector_size, NULL, NULL);
 	config->d_k1 = clCreateBuffer(config->_cl_context, CL_MEM_READ_WRITE, config->vector_size, NULL, NULL);
 	config->d_k2 = clCreateBuffer(config->_cl_context, CL_MEM_READ_WRITE, config->vector_size, NULL, NULL);
 	config->d_k3 = clCreateBuffer(config->_cl_context, CL_MEM_READ_WRITE, config->vector_size, NULL, NULL);
@@ -163,6 +164,7 @@ void gpu_delete_buffers(gpu_config_t *config)
 	clReleaseMemObject(config->d_v);
 	clReleaseMemObject(config->d_dv);
 	clReleaseMemObject(config->d_y);
+	clReleaseMemObject(config->d_ytemp);
 	clReleaseMemObject(config->d_k1);
 	clReleaseMemObject(config->d_k2);
 	clReleaseMemObject(config->d_k3);
@@ -246,15 +248,19 @@ void gpu_init(gpu_config_t *config, grid_model_t *model)
 	
 	// Create kernel entry point
 	config->_cl_kernel_rk4 = clCreateKernel(config->_cl_program, "slope_fn_grid_gpu", &err);
-	gpu_check_error(err, "Couldn't create a OpenCL kernel slope_fn_grid_gpu()");
+	gpu_check_error(err, "Couldn't create OpenCL kernel slope_fn_grid_gpu()");
 	config->_cl_kernel_average = clCreateKernel(config->_cl_program, "rk4_average", &err);
-	gpu_check_error(err, "Couldn't create a OpenCL kernel rk4_average()");
+	gpu_check_error(err, "Couldn't create OpenCL kernel rk4_average()");
+	config->_cl_kernel_average_with_maxdiff = clCreateKernel(config->_cl_program, "rk4_average_with_maxdiff", &err);
+	gpu_check_error(err, "Couldn't create OpenCL kernel rk4_average_with_maxdiff()");
+	config->_cl_kernel_max_reduce = clCreateKernel(config->_cl_program, "max_reduce", &err);
+	gpu_check_error(err, "Couldn't create OpenCL kernel max_reduce()");
 
 	// Create memory objects
 	gpu_create_buffers(config, model);
 
 	/* Create kernel arguments */
-	err = clSetKernelArg(config->_cl_kernel_rk4, 0, sizeof(cl_mem), &config->d_c_model);
+	err  = clSetKernelArg(config->_cl_kernel_rk4, 0, sizeof(cl_mem), &config->d_c_model);
 	err |= clSetKernelArg(config->_cl_kernel_rk4, 1, sizeof(cl_mem), &config->d_c_layer);
 	err |= clSetKernelArg(config->_cl_kernel_rk4, 2, sizeof(cl_mem), &config->d_v);
 	err |= clSetKernelArg(config->_cl_kernel_rk4, 3, sizeof(cl_mem), &config->d_dv);
@@ -267,7 +273,7 @@ void gpu_init(gpu_config_t *config, grid_model_t *model)
 	err |= clSetKernelArg(config->_cl_kernel_rk4, 10, sizeof(cl_mem), &config->d_k1);
 	err |= clSetKernelArg(config->_cl_kernel_rk4, 11, sizeof(cl_mem), &config->d_y);
 	gpu_check_error(err, "Couldn't setup a OpenCL kernel argument for slope_fn_grid_gpu()");
-	err = clSetKernelArg(config->_cl_kernel_average, 0, sizeof(cl_mem), &config->d_y);
+	err  = clSetKernelArg(config->_cl_kernel_average, 0, sizeof(cl_mem), &config->d_y);
 	err |= clSetKernelArg(config->_cl_kernel_average, 1, sizeof(cl_mem), &config->d_k1);
 	err |= clSetKernelArg(config->_cl_kernel_average, 2, sizeof(cl_mem), &config->d_k2);
 	err |= clSetKernelArg(config->_cl_kernel_average, 3, sizeof(cl_mem), &config->d_k3);
@@ -277,6 +283,21 @@ void gpu_init(gpu_config_t *config, grid_model_t *model)
 	int vector_size = config->vector_size / config->element_size;
 	err |= clSetKernelArg(config->_cl_kernel_average, 7, sizeof(vector_size), &vector_size);
 	gpu_check_error(err, "Couldn't setup a OpenCL kernel argument for rk4_average()");
+	err  = clSetKernelArg(config->_cl_kernel_average_with_maxdiff, 0, sizeof(cl_mem), &config->d_y);
+	err |= clSetKernelArg(config->_cl_kernel_average_with_maxdiff, 1, sizeof(cl_mem), &config->d_k1);
+	err |= clSetKernelArg(config->_cl_kernel_average_with_maxdiff, 2, sizeof(cl_mem), &config->d_k2);
+	err |= clSetKernelArg(config->_cl_kernel_average_with_maxdiff, 3, sizeof(cl_mem), &config->d_k3);
+	err |= clSetKernelArg(config->_cl_kernel_average_with_maxdiff, 4, sizeof(cl_mem), &config->d_k4);
+	// the 5th argument is h
+	err |= clSetKernelArg(config->_cl_kernel_average_with_maxdiff, 6, sizeof(cl_mem), &config->d_dv);
+	err |= clSetKernelArg(config->_cl_kernel_average_with_maxdiff, 7, sizeof(vector_size), &vector_size);
+	err |= clSetKernelArg(config->_cl_kernel_average_with_maxdiff, 8, sizeof(cl_mem), &config->d_ytemp);
+	err |= clSetKernelArg(config->_cl_kernel_average_with_maxdiff, 9, (config->local_work_size[0]) * (config->local_work_size[1]) * config->element_size, NULL);
+	gpu_check_error(err, "Couldn't setup a OpenCL kernel argument for rk4_average()");
+	err  = clSetKernelArg(config->_cl_kernel_max_reduce, 0, sizeof(cl_mem), &config->d_dv);
+	// err |= clSetKernelArg(config->_cl_kernel_max_reduce, 1, sizeof(vector_size), &vector_size);
+	err |= clSetKernelArg(config->_cl_kernel_max_reduce, 2, (config->local_work_size[0]) * (config->local_work_size[1]) * config->element_size, NULL);
+	gpu_check_error(err, "Couldn't setup a OpenCL kernel argument for max_reduce()");
 
 	// Setup kernel dimensions
 	if (model->rows % config->local_work_size[0] || model->cols % config->local_work_size[1])
@@ -307,7 +328,10 @@ void gpu_destroy(gpu_config_t *config)
 	gpu_delete_buffers(config);
 
 	// TODO
-	// clReleaseKernel(config->_cl_kernel);
+	clReleaseKernel(config->_cl_kernel_rk4);
+	clReleaseKernel(config->_cl_kernel_average);
+	clReleaseKernel(config->_cl_kernel_average_with_maxdiff);
+	clReleaseKernel(config->_cl_kernel_max_reduce);
 	// clReleaseMemObject(sum_buffer);
 	// clReleaseMemObject(input_buffer);
 
@@ -346,26 +370,29 @@ double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, dou
 		(*h) = new_h;
 
 		/* try RK4 once with normal step size	*/
-		rk4_core_gpu_kernel(config, model, y, k1, p, n, (*h), ytemp);
+		rk4_core_gpu_kernel(config, model, y, k1, p, n, (*h), ytemp, NULL, 0);
 
 		/* repeat it with two half-steps	*/
-		rk4_core_gpu_kernel(config, model, y, k1, p, n, (*h)/2.0, t1);
+		rk4_core_gpu_kernel(config, model, y, k1, p, n, (*h)/2.0, t1, NULL, 0);
 
 		/* y after 1st half-step is in t1. re-evaluate k1 for this	*/
 		slope_fn_grid_gpu_kernel(config, model, t1, p, k1);
 
 		/* get output of the second half-step in t2	*/	
-		rk4_core_gpu_kernel(config, model, t1, k1, p, n, (*h)/2.0, t2);
+		rk4_core_gpu_kernel(config, model, t1, k1, p, n, (*h)/2.0, t2, ytemp, 1);
 
 		/* find the max diff between these two results:
 		 * use t1 to store the diff
 		 */
+		/*
 		for(i=0; i < n; i++)
 			t1[i] = fabs(ytemp[i] - t2[i]);
 		max = t1[0];
 		for(i=1; i < n; i++)
 			if (max < t1[i])
 				max = t1[i];
+		*/
+		max = t2[0];
 
 		/* 
 		 * compute the correct step size: see equation 
@@ -467,7 +494,7 @@ void rk4_core_gpu(gpu_config_t *config, void *model, double *y, double *k1, void
 	free_dvector(t);
 }
 
-void rk4_core_gpu_kernel(gpu_config_t *config, void *model, double *y, double *k1, void *p, int n, double h, double *yout)
+void rk4_core_gpu_kernel(gpu_config_t *config, void *model, double *y, double *k1, void *p, int n, double h, double *yout, double *ytemp, int do_maxdiff)
 {
 	int i;
 	double h_real;
@@ -546,12 +573,33 @@ void rk4_core_gpu_kernel(gpu_config_t *config, void *model, double *y, double *k
 	/* yout = y + h*(k1/6 + k2/3 + k3/3 + k4/6)	*/
 	// for (i =0; i < n; i++)
 	//	yout[i] = y[i] + h * (k1[i] + 2*k2[i] + 2*k3[i] + k4[i])/6.0;
-	err = clSetKernelArg(config->_cl_kernel_average, 5, sizeof(h_real), &h_real);
-	gpu_check_error(err, "Couldn't setup a OpenCL kernel argument in rk4_average()");
-	size_t avg_kernel_global_size = config->global_work_size[0] * config->global_work_size[1];
-	size_t avg_kernel_local_size = config->local_work_size[0] * config->local_work_size[1];
-	err = clEnqueueNDRangeKernel(config->_cl_queue, config->_cl_kernel_average, 1, NULL, &avg_kernel_global_size, &avg_kernel_local_size, 0, NULL, NULL);
-	gpu_check_error(err, "Cannot launch kernel rk4_average()!");
+	if (do_maxdiff) {
+		// copy y_temp to device
+		clEnqueueWriteBuffer(config->_cl_queue, config->d_ytemp, CL_FALSE, 0, buffer_size, ytemp, 0, NULL, NULL);
+		// first phase reduction
+		err = clSetKernelArg(config->_cl_kernel_average_with_maxdiff, 5, sizeof(h_real), &h_real);
+		gpu_check_error(err, "Couldn't setup a OpenCL kernel argument in rk4_average_with_maxdiff()");
+		size_t avg_kernel_global_size = config->global_work_size[0] * config->global_work_size[1];
+		size_t avg_kernel_local_size = config->local_work_size[0] * config->local_work_size[1];
+		err = clEnqueueNDRangeKernel(config->_cl_queue, config->_cl_kernel_average_with_maxdiff, 1, NULL, &avg_kernel_global_size, &avg_kernel_local_size, 0, NULL, NULL);
+		gpu_check_error(err, "Cannot launch kernel rk4_average_with_maxdiff()!");
+		// second phase reduction, with 1 block only
+		int remained_items = avg_kernel_global_size / avg_kernel_local_size;
+		// printf("remained items: %d\n", remained_items);
+		err = clSetKernelArg(config->_cl_kernel_max_reduce, 1, sizeof(remained_items), &remained_items);
+		gpu_check_error(err, "Couldn't setup a OpenCL kernel argument in max_reduce()");
+		err = clEnqueueNDRangeKernel(config->_cl_queue, config->_cl_kernel_max_reduce, 1, NULL, &avg_kernel_local_size, &avg_kernel_local_size, 0, NULL, NULL);
+		gpu_check_error(err, "Cannot launch kernel max_reduce()!");
+		buffer_size = config->element_size; // only 1 number needed
+	}
+	else {
+		err = clSetKernelArg(config->_cl_kernel_average, 5, sizeof(h_real), &h_real);
+		gpu_check_error(err, "Couldn't setup a OpenCL kernel argument in rk4_average()");
+		size_t avg_kernel_global_size = config->global_work_size[0] * config->global_work_size[1];
+		size_t avg_kernel_local_size = config->local_work_size[0] * config->local_work_size[1];
+		err = clEnqueueNDRangeKernel(config->_cl_queue, config->_cl_kernel_average, 1, NULL, &avg_kernel_global_size, &avg_kernel_local_size, 0, NULL, NULL);
+		gpu_check_error(err, "Cannot launch kernel rk4_average()!");
+	}
 
 	// copy result back
 	config->h_result = clCreateBuffer(config->_cl_context, CL_MEM_WRITE_ONLY | CL_MEM_USE_HOST_PTR, buffer_size, yout, &err);
