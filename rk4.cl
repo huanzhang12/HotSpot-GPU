@@ -43,11 +43,54 @@ __kernel void rk4(__global float4* data,
 __kernel void rk4_average(__global double *y, __global double *k1, __global double *k2, __global double *k3, __global double *k4, double h, __global double *yout, unsigned int n) {
 	int id = get_global_id(0);
 	int stride = get_global_size(0);
-	for(int i = 0; i < n; i += stride) {
-		if (i + id < n) {
-			yout[i + id] = mad(h, (mad(2.0, k2[i + id], k1[i + id]) + mad(2.0, k3[i + id], k4[i + id])) / 6.0, y[i + id]);
+	for(int i = id; i < n; i += stride) {
+		yout[i] = mad(h, (mad(2.0, k2[i], k1[i]) + mad(2.0, k3[i], k4[i])) / 6.0, y[i]);
+
+	}
+}
+
+__kernel void rk4_average_with_maxdiff(__global double *y, __global double *k1, __global double *k2, __global double *k3, __global double *k4, double h, __global double *yout, unsigned int n, __global double *ytemp,  __local double *local_result) {
+	int stride = get_global_size(0) * 2;
+	int local_size = get_local_size(0);
+	int local_id = get_local_id(0);
+	int id = get_group_id(0) * get_local_size(0) * 2 + get_local_id(0);
+	double private_max = 0.0;
+	for(int i = id; i < n; i += stride) {
+		double yout_value_1 = mad(h, (mad(2.0, k2[i], k1[i]) + mad(2.0, k3[i], k4[i])) / 6.0, y[i]);
+		double yout_value_2 = mad(h, (mad(2.0, k2[i+local_size], k1[i+local_size]) + mad(2.0, k3[i+local_size], k4[i+local_size])) / 6.0, y[i+local_size]);
+		private_max = max(private_max, max(fabs(ytemp[i] - yout_value_1), fabs(ytemp[i+local_size] - yout_value_2)));
+	}
+	local_result[local_id] = private_max;
+	barrier(CLK_LOCAL_MEM_FENCE);
+	// TODO: unroll this loop
+	for (int i = local_size >> 1; i > 0; i >>= 1) {
+		if (local_id < i) {
+			local_result[local_id] = max(local_result[local_id], local_result[local_id + i]);
 		}
 	}
+	barrier(CLK_LOCAL_MEM_FENCE);
+	yout[get_group_id(0)] = local_result[0];
+}
+
+__kernel void max_reduce(__global double *y, unsigned int n, __local double *local_result) {
+	int stride = get_global_size(0) * 2;
+	int local_size = get_local_size(0);
+	int local_id = get_local_id(0);
+	int id = get_group_id(0) * get_local_size(0) * 2 + get_local_id(0);
+	double private_max = 0.0;
+	for(int i = id; i < n; i += stride) {
+		// do first level reduction here
+		private_max = max(private_max, max(y[i + local_size], y[i]));
+	}
+	barrier(CLK_LOCAL_MEM_FENCE);
+	// TODO: unroll this loop
+	for (int i = local_size>>1; i > 0; i >>= 1) {
+		if (local_id < i) {
+			local_result[local_id] = max(local_result[local_id], local_result[local_id + i]);
+		}
+	}
+	barrier(CLK_LOCAL_MEM_FENCE);
+	y[get_group_id(0)] = local_result[0];
 }
 
 //finds sum of a row minus subVal
@@ -82,7 +125,7 @@ void sum_col(__global double *v, int nl, int nr, int nc, __local double *local_r
 	}
 }
 
-__kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model, __constant gpu_layer_t *l, __global double *v, __global double *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local double *local_result, __local double *x)
+__kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__((max_constant_size(sizeof(gpu_grid_model_t)))), __constant gpu_layer_t *l __attribute__((max_constant_size(MAX_LAYER_SUPPORT*sizeof(gpu_layer_t)))), __global double *v, __global double *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local double *local_result, __local double *x)
 {
 
 	/* sum of the currents(power values)	*/
@@ -571,10 +614,8 @@ void load_extra_to_shared_with_endpoint(__global double *y, __global double *k, 
 	int id = mad24(get_local_id(1), get_local_size(0), get_local_id(0)); // row (row-major)
 	int stride = mul24(get_local_size(1), get_local_size(0));
 	int i;
-	for (i = 0; i < n; i += stride) {
-		if (i + id < n) {
-			extra_cached[i + id] = mad(h, k[i + id], y[i + id]);
-		}
+	for (i = id; i < n; i += stride) {
+		extra_cached[i] = mad(h, k[i], y[i]);
 	}
 	barrier(CLK_LOCAL_MEM_FENCE);
 }
@@ -584,16 +625,14 @@ void load_extra_to_shared(__global double *x, __local double * extra_cached, int
 	int id = mad24(get_local_id(1), get_local_size(0), get_local_id(0)); // row (row-major)
 	int stride = mul24(get_local_size(1), get_local_size(0));
 	int i;
-	for (i = 0; i < n; i += stride) {
-		if (i + id < n) {
-			extra_cached[i + id] = x[i + id];
-		}
+	for (i = id; i < n; i += stride) {
+		extra_cached[i] = x[i];
 	}
 	barrier(CLK_LOCAL_MEM_FENCE);
 }
 
 /*  Test correctness of local memory caching */
-__kernel void slope_fn_grid_gpu_test(__constant gpu_grid_model_t *model, __constant gpu_layer_t *l, __global double *v, __global double *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local double *local_result, __global double *p_cuboid)
+__kernel void slope_fn_grid_gpu_test(__constant gpu_grid_model_t *model __attribute__((max_constant_size(sizeof(gpu_grid_model_t)))), __constant gpu_layer_t *l __attribute__((max_constant_size(MAX_LAYER_SUPPORT*sizeof(gpu_layer_t)))), __global double *v, __global double *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local double *local_result, __global double *p_cuboid)
 {
 	int n;
 	int i = get_global_id(1); // row (row-major)
@@ -658,7 +697,7 @@ __kernel void slope_fn_grid_gpu_test(__constant gpu_grid_model_t *model, __const
  * equation is CdV + sum{(T - Ti)/Ri} = P 
  * so, slope = dV = [P + sum{(Ti-T)/Ri}]/C
  */
-__kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model, __constant gpu_layer_t *l, __global double *v, __global double *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local double *local_result, __global double *p_cuboid, double h, __global double *k, __global double *y)
+__kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__((max_constant_size(sizeof(gpu_grid_model_t)))), __constant gpu_layer_t *l __attribute__((max_constant_size(MAX_LAYER_SUPPORT*sizeof(gpu_layer_t)))), __global double *v, __global double *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local double *local_result, __global double *p_cuboid, double h, __global double *k, __global double *y)
 {
 	int n;
 	int i = get_global_id(1); // row (row-major)

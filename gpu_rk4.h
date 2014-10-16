@@ -70,6 +70,8 @@
 #define LAYER_SOLDER	1
 #define LAYER_PCB	2
 
+#define MAX_LAYER_SUPPORT	32
+
 /* package parameters	*/
 typedef struct gpu_package_RC_t_st
 {
