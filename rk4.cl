@@ -716,6 +716,19 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__
 	double s_pcb = model->config.s_pcb;
 	/* pointer to the starting address of the extra nodes	*/
 	// __global double *x = v + mul24(nl, nr) * nc;
+	
+	if (!model_secondary) {
+		spidx = nl - DEFAULT_PACK_LAYERS + LAYER_SP;
+		hsidx = nl - DEFAULT_PACK_LAYERS + LAYER_SINK;
+	} else {
+		spidx = nl - DEFAULT_PACK_LAYERS - SEC_PACK_LAYERS + LAYER_SP;
+		hsidx = nl - DEFAULT_PACK_LAYERS - SEC_PACK_LAYERS + LAYER_SINK;
+		metalidx = nl - DEFAULT_PACK_LAYERS - SEC_PACK_LAYERS - SEC_CHIP_LAYERS + LAYER_METAL;
+		c4idx = nl - DEFAULT_PACK_LAYERS - SEC_PACK_LAYERS - SEC_CHIP_LAYERS + LAYER_C4;
+		subidx = nl - SEC_PACK_LAYERS + LAYER_SUB;
+		solderidx = nl - SEC_PACK_LAYERS + LAYER_SOLDER;
+		pcbidx = nl - SEC_PACK_LAYERS + LAYER_PCB;
+	}	
 
 	/* Do we need to calculate endpoint instead of reading it directly? */
 	bool do_endpoint = (h != 0.0);
@@ -759,19 +772,6 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__
 		load_extra_to_shared(v + mul24(nl, nr) * nc, x, model_secondary ? (EXTRA + EXTRA_SEC) : (EXTRA));
 	}
 	
-	if (!model_secondary) {
-		spidx = nl - DEFAULT_PACK_LAYERS + LAYER_SP;
-		hsidx = nl - DEFAULT_PACK_LAYERS + LAYER_SINK;
-	} else {
-		spidx = nl - DEFAULT_PACK_LAYERS - SEC_PACK_LAYERS + LAYER_SP;
-		hsidx = nl - DEFAULT_PACK_LAYERS - SEC_PACK_LAYERS + LAYER_SINK;
-		metalidx = nl - DEFAULT_PACK_LAYERS - SEC_PACK_LAYERS - SEC_CHIP_LAYERS + LAYER_METAL;
-		c4idx = nl - DEFAULT_PACK_LAYERS - SEC_PACK_LAYERS - SEC_CHIP_LAYERS + LAYER_C4;
-		subidx = nl - SEC_PACK_LAYERS + LAYER_SUB;
-		solderidx = nl - SEC_PACK_LAYERS + LAYER_SOLDER;
-		pcbidx = nl - SEC_PACK_LAYERS + LAYER_PCB;
-	}
-	
 	/* for each grid cell	*/
 	for(n=0; n < nl; n++) {
 		/* load the next layer to local memory (layer n is in buffer right now, but n+1 isn't) */
@@ -780,7 +780,7 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__
 		if (load_next_layer) {
 			++next_layer;
 			if (do_endpoint) {
-				bool save_to_global = model_secondary && ((n == metalidx-1) || (n == subidx) || (n == c4idx));
+				bool save_to_global = model_secondary && ((next_layer == metalidx-1) || (next_layer == subidx) || (next_layer == c4idx));
 				load_v_to_shared_with_endpoint(y, k, h, v_cached[next_layer & 0x3], next_layer, nl, nr, nc, v, 1, save_to_global); // v + k * h
 			}
 			else {
@@ -920,4 +920,6 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__
 	}
 	slope_fn_pack_gpu(model, l, v, dv, nl, nr, nc, local_result, x);
 }
+
+
 
