@@ -840,7 +840,7 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__
 	for(n=0; n < min(nl, 0x4u); n++) {
 		if (do_endpoint) {
 			// we only need these layers to be saved to global memory when secondary model is enabled, because the cache is not large enough to hold all layers
-			bool save_to_global = model_secondary && ((n == metalidx-1) || (n == subidx) || (n == c4idx));
+			bool save_to_global = model_secondary && ((n == metalidx-1) || (n == c4idx));
 			load_v_to_shared_with_endpoint(y, k, h, v_cached[n], n, nl, nr, nc, v, 1, save_to_global); // v = y + k * h
 		}
 		else {
@@ -849,8 +849,9 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__
 	}
 	bool preload_spidx = do_endpoint && model_secondary;
 	if (preload_spidx) {
-		// compute layer spidx and save it to global memory. This layer will be used by secondary model before it is loaded into local (and global) memory.
-		load_v_to_shared_with_endpoint(y, k, h, v_cached[0], spidx, nl, nr, nc, v, 0, 1); // v = y + k * h
+		// compute layer spidx, subidx and save it to global memory. This layer will be used by secondary model before it is loaded into local (and global) memory.
+		load_v_to_shared_with_endpoint(y, k, h, v_cached[0], spidx , nl, nr, nc, v, 0, 1); // v = y + k * h
+		load_v_to_shared_with_endpoint(y, k, h, v_cached[0], subidx, nl, nr, nc, v, 0, 1); // v = y + k * h
 	}
 	uint next_layer = n - 1;
 	/* for local memory access */
@@ -874,7 +875,7 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__
 		if (load_next_layer) {
 			++next_layer;
 			if (do_endpoint) {
-				bool save_to_global = model_secondary && ((next_layer == metalidx-1) || (next_layer == subidx) || (next_layer == c4idx));
+				bool save_to_global = model_secondary && ((next_layer == metalidx-1) || (next_layer == c4idx));
 				load_v_to_shared_with_endpoint(y, k, h, v_cached[next_layer & 0x3], next_layer, nl, nr, nc, v, 1, save_to_global); // v + k * h
 			}
 			else {
@@ -911,7 +912,7 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__
 			} else if (n==c4idx) { //C4 layer (3, requires layer 6, 2)
 				psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
 				   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
-				   ((A3D(v,subidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[subidx].rz) + // must load from global memory (OK)
+				   ((A3D(v,subidx,i,j,nl,nr,nc)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[subidx].rz) + // must load from global memory (need it early)
 				   ((A3D(v_cached[0],((n_s-1) & 3),i_s,j_s,nl_s,nr_s,nc_s)-A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s))/l[n].rz); // metalidx
 			} else if (n==subidx) { //Substrate layer (6, requires layer 7, 3)
 				psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 

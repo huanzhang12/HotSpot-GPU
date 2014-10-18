@@ -146,26 +146,38 @@ void gpu_create_buffers(gpu_config_t *config, grid_model_t *model)
 	config->cuboid_size = model->rows * model->cols * model->n_layers * element_size;
 	config->vector_size = config->extra_size + config->cuboid_size;
 
+	/* we initialize memory to NaN. If the kernel has unexpected accesses, NaN will propagate. */
+	double pattern = NAN;
 	/* prepare device memory */
 	config->d_v = clCreateBuffer(config->_cl_context, CL_MEM_READ_WRITE, config->vector_size, NULL, &err);
+	err |= clEnqueueFillBuffer(config->_cl_queue, config->d_v, &pattern, element_size, 0, config->vector_size, 0, NULL, NULL);
 	gpu_check_error(err, "clCreateBuffer() for d_v failed.");
 	config->d_dv = clCreateBuffer(config->_cl_context, CL_MEM_READ_WRITE, config->vector_size, NULL, &err);
+	err |= clEnqueueFillBuffer(config->_cl_queue, config->d_dv, &pattern, element_size, 0, config->vector_size, 0, NULL, NULL);
 	gpu_check_error(err, "clCreateBuffer() for d_dv failed.");
 	config->d_p_cuboid = clCreateBuffer(config->_cl_context, CL_MEM_READ_ONLY, config->vector_size, NULL, &err);
+	err |= clEnqueueFillBuffer(config->_cl_queue, config->d_p_cuboid, &pattern, element_size, 0, config->vector_size, 0, NULL, NULL);
 	gpu_check_error(err, "clCreateBuffer() for d_p_cuboid failed.");
 	config->d_y = clCreateBuffer(config->_cl_context, CL_MEM_READ_WRITE, config->vector_size, NULL, &err);
+	err |= clEnqueueFillBuffer(config->_cl_queue, config->d_y, &pattern, element_size, 0, config->vector_size, 0, NULL, NULL);
 	gpu_check_error(err, "clCreateBuffer() for d_y failed.");
 	config->d_ytemp = clCreateBuffer(config->_cl_context, CL_MEM_READ_WRITE, config->vector_size, NULL, &err);
+	err |= clEnqueueFillBuffer(config->_cl_queue, config->d_ytemp, &pattern, element_size, 0, config->vector_size, 0, NULL, NULL);
 	gpu_check_error(err, "clCreateBuffer() for d_ytemp failed.");
 	config->d_k1 = clCreateBuffer(config->_cl_context, CL_MEM_READ_WRITE, config->vector_size, NULL, &err);
+	err |= clEnqueueFillBuffer(config->_cl_queue, config->d_k1, &pattern, element_size, 0, config->vector_size, 0, NULL, NULL);
 	gpu_check_error(err, "clCreateBuffer() for d_k1 failed.");
 	config->d_k2 = clCreateBuffer(config->_cl_context, CL_MEM_READ_WRITE, config->vector_size, NULL, &err);
+	err |= clEnqueueFillBuffer(config->_cl_queue, config->d_k2, &pattern, element_size, 0, config->vector_size, 0, NULL, NULL);
 	gpu_check_error(err, "clCreateBuffer() for d_k2 failed.");
 	config->d_k3 = clCreateBuffer(config->_cl_context, CL_MEM_READ_WRITE, config->vector_size, NULL, &err);
+	err |= clEnqueueFillBuffer(config->_cl_queue, config->d_k3, &pattern, element_size, 0, config->vector_size, 0, NULL, NULL);
 	gpu_check_error(err, "clCreateBuffer() for d_k3 failed.");
 	config->d_k4 = clCreateBuffer(config->_cl_context, CL_MEM_READ_WRITE, config->vector_size, NULL, &err);
+	err |= clEnqueueFillBuffer(config->_cl_queue, config->d_k4, &pattern, element_size, 0, config->vector_size, 0, NULL, NULL);
 	gpu_check_error(err, "clCreateBuffer() for d_k4 failed.");
 	config->d_t1 = clCreateBuffer(config->_cl_context, CL_MEM_READ_WRITE, config->vector_size, NULL, &err);
+	err |= clEnqueueFillBuffer(config->_cl_queue, config->d_t1, &pattern, element_size, 0, config->vector_size, 0, NULL, NULL);
 	gpu_check_error(err, "clCreateBuffer() for d_t1 failed.");
 
 	/* prepare constant memory */
@@ -447,7 +459,7 @@ double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, dou
 	// gpu_print_array(config, config->d_y, 0, 1, "y:\t");
 	/* evaluate the slope k1 at the beginning */
 	// slope_fn_grid_gpu_kernel(config, model, y, p, k1);
-
+	DEBUG_Flush(config->_cl_queue);
 	// clEnqueueReadBuffer(config->_cl_queue, config->d_y, CL_TRUE, 0, buffer_size, input, 0, NULL, NULL);
 	slope_fn_grid_gpu_kernel(config, model, &config->d_y, p, &config->d_k1);
 	// slope_fn_grid_gpu(config, model, input, p, output);
@@ -457,17 +469,17 @@ double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, dou
 	/* try until accuracy is achieved	*/
 	do {
 		(*h) = new_h;
-
+		DEBUG_Flush(config->_cl_queue);
 		/* try RK4 once with normal step size	*/
 		// rk4_core_gpu_kernel(config, model, y, k1, p, n, (*h), ytemp, NULL, 0);
 		rk4_core_gpu_kernel(config, model, &config->d_y, &config->d_k1, p, n, (*h), &config->d_ytemp, NULL, 0);
 		// gpu_print_array(config, config->d_ytemp, 0, 1, "ytemp:\t");
-
+		DEBUG_Flush(config->_cl_queue);
 		/* repeat it with two half-steps	*/
 		// rk4_core_gpu_kernel(config, model, y, k1, p, n, (*h)/2.0, t1, NULL, 0);
 		rk4_core_gpu_kernel(config, model, &config->d_y, &config->d_k1, p, n, (*h)/2.0, &config->d_t1, NULL, 0);
 		// gpu_print_array(config, config->d_t1, 0, 1, "t1:\t");
-
+		DEBUG_Flush(config->_cl_queue);
 		/* y after 1st half-step is in t1. re-evaluate k1 for this	*/
 		// slope_fn_grid_gpu_kernel(config, model, t1, p, k1);
 		// clEnqueueReadBuffer(config->_cl_queue, config->d_t1, CL_TRUE, 0, buffer_size, input, 0, NULL, NULL);
@@ -475,7 +487,7 @@ double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, dou
 		// clEnqueueWriteBuffer(config->_cl_queue, config->d_k1, CL_TRUE, 0, buffer_size, output, 0, NULL, NULL);
 		slope_fn_grid_gpu_kernel(config, model, &config->d_t1, p, &config->d_k1);
 		// gpu_print_array(config, config->d_k1, 0, 1, "k1:\t");
-
+		DEBUG_Flush(config->_cl_queue);
 		/* get output of the second half-step in t2	*/	
 		// rk4_core_gpu_kernel(config, model, t1, k1, p, n, (*h)/2.0, t2, ytemp, 1);
 		rk4_core_gpu_kernel(config, model, &config->d_t1, &config->d_k1, p, n, (*h)/2.0, &config->d_dv, &config->d_ytemp, 1);
