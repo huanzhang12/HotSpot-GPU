@@ -61,7 +61,7 @@ endif	# DEBUG = 1
 else	# MATHACCEL != sun	
 CC 			= gcc
 ifeq ($(DEBUG), 1)
-OFLAGS		= -O0 -ggdb -Wall -mfpmath=sse
+OFLAGS		= -Og -ggdb -Wall -mfpmath=sse
 else
 ifeq ($(DEBUG), 2)
 OFLAGS		= -O3 -pg -ggdb -Wall -mfpmath=sse

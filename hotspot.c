@@ -302,10 +302,7 @@ int main(int argc, char **argv)
 	thermal_config_t thermal_config;
 	/* global configuration parameters	*/
 	global_config_t global_config;
-#if GPGPU > 0
-	/* GPGPU parameters */
-	gpu_config_t gpu_config;
-#endif
+
 	/* table to hold options and configuration */
 	str_pair table[MAX_ENTRIES];
 	
@@ -359,6 +356,15 @@ int main(int argc, char **argv)
 		/* prefix the name of the variable with a '-'	*/
 		dump_str_pairs(table, size, global_config.dump_config, "-");
 	}
+
+#if GPGPU > 0
+	/* GPGPU parameters */
+	gpu_config_t gpu_config;
+	/* get defaults */
+	gpu_config = default_gpu_config();
+	/* modify according to command line / config file	*/
+	gpu_config_from_strs(&gpu_config, table, size);
+#endif
 
 	/* initialization: the flp_file global configuration 
 	 * parameter is overridden by the layer configuration 
@@ -419,10 +425,6 @@ int main(int argc, char **argv)
 		fatal("no. of units in floorplan and trace file differ\n");
 
 #if GPGPU > 0
-	/* get defaults */
-	gpu_config = default_gpu_config();
-	/* modify according to command line / config file	*/
-	gpu_config_from_strs(&gpu_config, table, size);
 	/* initialize GPU */
 	gpu_init(&gpu_config, model->grid);
 #endif

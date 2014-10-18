@@ -96,9 +96,26 @@ __kernel void max_reduce(__global double *y, unsigned int n, __local double *loc
 void sum_row(__global double *v, int nl, int nr, int nc, __local double *local_result, int n, int i, double sub_val) {
 	uint local_id = mad24(get_local_id(1), get_local_size(0), get_local_id(0));
 	uint threads_per_group = mul24(get_local_size(0), get_local_size(1));
-	local_result[local_id] = 0.0;
+	double private_sum = 0.0;
 	for(int j = local_id; j < nc; j += threads_per_group)
-		local_result[local_id] += (A3D(v,n,i,j,nl,nr,nc) - sub_val);
+		private_sum += (A3D(v,n,i,j,nl,nr,nc) - sub_val);
+	local_result[local_id] = private_sum;
+	barrier(CLK_LOCAL_MEM_FENCE);
+	for(int stride = threads_per_group >> 1; stride > 0; stride >>= 1) {
+		if(local_id < stride) {
+			local_result[local_id] += local_result[local_id + stride];
+		}
+		barrier(CLK_LOCAL_MEM_FENCE);
+	}
+}
+
+void sum_row_with_endpoint(int nl, int nr, int nc, __local double *local_result, int n, int i, double sub_val, double h, __global double *k, __global double *y) {
+	uint local_id = mad24(get_local_id(1), get_local_size(0), get_local_id(0));
+	uint threads_per_group = mul24(get_local_size(0), get_local_size(1));
+	double private_sum = 0.0;
+	for(int j = local_id; j < nc; j += threads_per_group)
+		private_sum += (mad(h, A3D(k,n,i,j,nl,nr,nc), A3D(y,n,i,j,nl,nr,nc)) - sub_val);
+	local_result[local_id] = private_sum;
 	barrier(CLK_LOCAL_MEM_FENCE);
 	for(int stride = threads_per_group >> 1; stride > 0; stride >>= 1) {
 		if(local_id < stride) {
@@ -112,9 +129,10 @@ void sum_row(__global double *v, int nl, int nr, int nc, __local double *local_r
 void sum_col(__global double *v, int nl, int nr, int nc, __local double *local_result, int n, int j, double sub_val) {
 	uint local_id = mad24(get_local_id(1), get_local_size(0), get_local_id(0));
 	uint threads_per_group = mul24(get_local_size(0), get_local_size(1));
-	local_result[local_id] = 0.0;
+	double private_sum = 0.0;
 	for(int i = local_id; i < nr; i += threads_per_group)
-		local_result[local_id] += (A3D(v,n,i,j,nl,nr,nc) - sub_val);
+		private_sum += (A3D(v,n,i,j,nl,nr,nc) - sub_val);
+	local_result[local_id] = private_sum;
 	barrier(CLK_LOCAL_MEM_FENCE);
 	for(int stride = threads_per_group >> 1; stride > 0; stride >>= 1) {
 		if(local_id < stride) {
@@ -124,7 +142,23 @@ void sum_col(__global double *v, int nl, int nr, int nc, __local double *local_r
 	}
 }
 
-__kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__((max_constant_size(sizeof(gpu_grid_model_t)))), __constant gpu_layer_t *l __attribute__((max_constant_size(MAX_LAYER_SUPPORT*sizeof(gpu_layer_t)))), __global double *v, __global double *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local double *local_result, __local double *x)
+void sum_col_with_endpoint(int nl, int nr, int nc, __local double *local_result, int n, int j, double sub_val, double h, __global double *k, __global double *y) {
+	uint local_id = mad24(get_local_id(1), get_local_size(0), get_local_id(0));
+	uint threads_per_group = mul24(get_local_size(0), get_local_size(1));
+	double private_sum = 0.0;
+	for(int i = local_id; i < nr; i += threads_per_group)
+		private_sum += (mad(h, A3D(k,n,i,j,nl,nr,nc), A3D(y,n,i,j,nl,nr,nc)) - sub_val);
+	local_result[local_id] = private_sum;
+	barrier(CLK_LOCAL_MEM_FENCE);
+	for(int stride = threads_per_group >> 1; stride > 0; stride >>= 1) {
+		if(local_id < stride) {
+			local_result[local_id] += local_result[local_id + stride];
+		}
+		barrier(CLK_LOCAL_MEM_FENCE);
+	}
+}
+
+__kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__((max_constant_size(sizeof(gpu_grid_model_t)))), __constant gpu_layer_t *l __attribute__((max_constant_size(MAX_LAYER_SUPPORT*sizeof(gpu_layer_t)))), __global double *v, __global double *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local double *local_result, __local double *x, double h, __global double *k, __global double *y)
 {
 
 	/* sum of the currents(power values)	*/
@@ -153,6 +187,9 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 	unsigned int local_id = mad24(get_local_id(1), get_local_size(0), get_local_id(0));
 	unsigned int num_blocks_mask = (0x1u << (31 - clz(mul24(get_num_groups(0), get_num_groups(1))))) - 0x1u;
 	unsigned int group_job_id = 1;
+
+	/* Do we need to calculate endpoint instead of reading it directly? */
+	bool do_endpoint = (h != 0.0);
 
 	
 	if (!model_secondary) {
@@ -194,7 +231,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 	/* partition r_hs1_y among all the nc grid cells. edge cell has half the ry	*/
 	if (block_id == group_job_id)
 	{
-		sum_row(v, nl, nr, nc, local_result, hsidx, 0, x[SINK_C_N]);
+		if (do_endpoint)		
+			sum_row_with_endpoint(nl, nr, nc, local_result, hsidx, 0, x[SINK_C_N], h, k, y);
+		else
+			sum_row(v, nl, nr, nc, local_result, hsidx, 0, x[SINK_C_N]);
 		if (local_id == 0)
 		{
 			psum = local_result[0];
@@ -209,7 +249,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 	
 	if (block_id == group_job_id)
 	{
-		sum_row(v, nl, nr, nc, local_result, hsidx, nr-1, x[SINK_C_S]);
+		if (do_endpoint)	
+			sum_row_with_endpoint(nl, nr, nc, local_result, hsidx, nr-1, x[SINK_C_S], h, k, y);
+		else
+			sum_row(v, nl, nr, nc, local_result, hsidx, nr-1, x[SINK_C_S]);
 		if (local_id == 0)
 		{
 			psum = local_result[0];
@@ -226,7 +269,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 	/* partition r_hs1_x among all the nr grid cells. edge cell has half the rx	*/
 	if (block_id == group_job_id)
 	{
-		sum_col(v, nl, nr, nc, local_result, hsidx, 0, x[SINK_C_W]);
+		if (do_endpoint)
+			sum_col_with_endpoint(nl, nr, nc, local_result, hsidx, 0, x[SINK_C_W], h, k, y);
+		else
+			sum_col(v, nl, nr, nc, local_result, hsidx, 0, x[SINK_C_W]);
 		if (local_id == 0)
 		{
 			psum = local_result[0];
@@ -241,7 +287,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 
 	if (block_id == group_job_id)
 	{
-		sum_col(v, nl, nr, nc, local_result, hsidx, nc-1, x[SINK_C_E]);
+		if (do_endpoint)
+			sum_col_with_endpoint(nl, nr, nc, local_result, hsidx, nc-1, x[SINK_C_E], h, k, y);
+		else
+			sum_col(v, nl, nr, nc, local_result, hsidx, nc-1, x[SINK_C_E]);
 		if (local_id == 0)
 		{
 			psum = local_result[0];
@@ -258,7 +307,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 	/* partition r_sp1_y among all the nc grid cells. edge cell has half the ry	*/
 	if (block_id == group_job_id)
 	{
-		sum_row(v, nl, nr, nc, local_result, spidx, 0, x[SP_N]);
+		if (do_endpoint)
+			sum_row_with_endpoint(nl, nr, nc, local_result, spidx, 0, x[SP_N], h, k, y);
+		else		
+			sum_row(v, nl, nr, nc, local_result, spidx, 0, x[SP_N]);
 		if (local_id == 0)
 		{
 			psum = local_result[0];
@@ -271,7 +323,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 
 	if (block_id == group_job_id)
 	{
-		sum_row(v, nl, nr, nc, local_result, spidx, nr-1, x[SP_S]);
+		if (do_endpoint)
+			sum_row_with_endpoint(nl, nr, nc, local_result, spidx, nr-1, x[SP_S], h, k, y);
+		else
+			sum_row(v, nl, nr, nc, local_result, spidx, nr-1, x[SP_S]);
 		if (local_id == 0)
 		{
 			psum = local_result[0];
@@ -286,7 +341,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 	/* partition r_sp1_x among all the nr grid cells. edge cell has half the rx	*/
 	if (block_id == group_job_id)
 	{
-		sum_col(v, nl, nr, nc, local_result, spidx, 0, x[SP_W]);
+		if (do_endpoint)
+			sum_col_with_endpoint(nl, nr, nc, local_result, spidx, 0, x[SP_W], h, k, y);
+		else
+			sum_col(v, nl, nr, nc, local_result, spidx, 0, x[SP_W]);
 		if (local_id == 0)
 		{
 			psum = local_result[0];
@@ -299,7 +357,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 
 	if (block_id == group_job_id)
 	{
-		sum_col(v, nl, nr, nc, local_result, spidx, nc-1, x[SP_E]);
+		if (do_endpoint)
+			sum_col_with_endpoint(nl, nr, nc, local_result, spidx, nc-1, x[SP_E], h, k, y);
+		else
+			sum_col(v, nl, nr, nc, local_result, spidx, nc-1, x[SP_E]);
 		if (local_id == 0)
 		{
 			psum = local_result[0];
@@ -337,7 +398,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 		/* partition r_pcb1_y among all the nc grid cells. edge cell has half the ry	*/
 		if (block_id == group_job_id)
 		{
-			sum_row(v, nl, nr, nc, local_result, pcbidx, 0, x[PCB_C_N]);
+			if (do_endpoint)
+				sum_row_with_endpoint(nl, nr, nc, local_result, pcbidx, 0, x[PCB_C_N], h, k, y);
+			else
+				sum_row(v, nl, nr, nc, local_result, pcbidx, 0, x[PCB_C_N]);
 			if (local_id == 0)
 			{
 				psum = local_result[0];
@@ -352,7 +416,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
   		
 		if (block_id == group_job_id)
 		{
-			sum_row(v, nl, nr, nc, local_result, pcbidx, nr-1, x[PCB_C_S]);
+			if (do_endpoint)
+				sum_row_with_endpoint(nl, nr, nc, local_result, pcbidx, nr-1, x[PCB_C_S], h, k, y);
+			else
+				sum_row(v, nl, nr, nc, local_result, pcbidx, nr-1, x[PCB_C_S]);
 			if (local_id == 0)
 			{
 				psum = local_result[0];
@@ -369,7 +436,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 		/* partition r_pcb1_x among all the nr grid cells. edge cell has half the rx	*/
 		if (block_id == group_job_id)
 		{
-			sum_col(v, nl, nr, nc, local_result, pcbidx, 0, x[PCB_C_W]);
+			if (do_endpoint)
+				sum_col_with_endpoint(nl, nr, nc, local_result, pcbidx, 0, x[PCB_C_W], h, k, y);
+			else
+				sum_col(v, nl, nr, nc, local_result, pcbidx, 0, x[PCB_C_W]);
 			if (local_id == 0)
 			{
 				psum = local_result[0];
@@ -384,7 +454,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
   		
 		if (block_id == group_job_id)
 		{
-			sum_col(v, nl, nr, nc, local_result, pcbidx, nc-1, x[PCB_C_E]);
+			if (do_endpoint)
+				sum_col_with_endpoint(nl, nr, nc, local_result, pcbidx, nc-1, x[PCB_C_E], h, k, y);
+			else
+				sum_col(v, nl, nr, nc, local_result, pcbidx, nc-1, x[PCB_C_E]);
 			if (local_id == 0)
 			{
 				psum = local_result[0];
@@ -401,7 +474,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 		/* partition r_solder1_y among all the nc grid cells. edge cell has half the ry	*/
 		if (block_id == group_job_id)
 		{
-			sum_row(v, nl, nr, nc, local_result, solderidx, 0, x[SOLDER_N]);
+			if (do_endpoint)
+				sum_row_with_endpoint(nl, nr, nc, local_result, solderidx, 0, x[SOLDER_N], h, k, y);
+			else
+				sum_row(v, nl, nr, nc, local_result, solderidx, 0, x[SOLDER_N]);
 			if (local_id == 0)
 			{
 				psum = local_result[0];
@@ -414,7 +490,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
   		
 		if (block_id == group_job_id)
 		{
-			sum_row(v, nl, nr, nc, local_result, solderidx, nr-1, x[SOLDER_S]);
+			if (do_endpoint)
+				sum_row_with_endpoint(nl, nr, nc, local_result, solderidx, nr-1, x[SOLDER_S], h, k, y);
+			else
+				sum_row(v, nl, nr, nc, local_result, solderidx, nr-1, x[SOLDER_S]);
 			if (local_id == 0)
 			{
 				psum = local_result[0];
@@ -429,7 +508,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 		/* partition r_solder1_x among all the nr grid cells. edge cell has half the rx	*/
 		if (block_id == group_job_id)
 		{
-			sum_col(v, nl, nr, nc, local_result, solderidx, 0, x[SOLDER_W]);
+			if (do_endpoint)
+				sum_col_with_endpoint(nl, nr, nc, local_result, solderidx, 0, x[SOLDER_W], h, k, y);
+			else
+				sum_col(v, nl, nr, nc, local_result, solderidx, 0, x[SOLDER_W]);
 			if (local_id == 0)
 			{
 				psum = local_result[0];
@@ -442,7 +524,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
   		
 		if (block_id == group_job_id)
 		{
-			sum_col(v, nl, nr, nc, local_result, solderidx, nc-1, x[SOLDER_E]);
+			if (do_endpoint)
+				sum_col_with_endpoint(nl, nr, nc, local_result, solderidx, nc-1, x[SOLDER_E], h, k, y);
+			else
+				sum_col(v, nl, nr, nc, local_result, solderidx, nc-1, x[SOLDER_E]);
 			if (local_id == 0)
 			{
 				psum = local_result[0];
@@ -457,7 +542,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 		/* partition r_sub1_y among all the nc grid cells. edge cell has half the ry	*/
 		if (block_id == group_job_id)
 		{
-			sum_row(v, nl, nr, nc, local_result, subidx, 0, x[SUB_N]);
+			if (do_endpoint)
+				sum_row_with_endpoint(nl, nr, nc, local_result, subidx, 0, x[SUB_N], h, k, y);
+			else
+				sum_row(v, nl, nr, nc, local_result, subidx, 0, x[SUB_N]);
 			if (local_id == 0)
 			{
 				psum = local_result[0];
@@ -470,7 +558,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
   		
 		if (block_id == group_job_id)
 		{
-			sum_row(v, nl, nr, nc, local_result, subidx, nr-1, x[SOLDER_S]);
+			if (do_endpoint)
+				sum_row_with_endpoint(nl, nr, nc, local_result, subidx, nr-1, x[SOLDER_S], h, k, y);
+			else
+				sum_row(v, nl, nr, nc, local_result, subidx, nr-1, x[SOLDER_S]);
 			if (local_id == 0)
 			{
 				psum = local_result[0];
@@ -485,7 +576,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 		/* partition r_sub1_x among all the nr grid cells. edge cell has half the rx	*/
 		if (block_id == group_job_id)
 		{
-			sum_col(v, nl, nr, nc, local_result, subidx, 0, x[SUB_W]);
+			if (do_endpoint)
+				sum_col_with_endpoint(nl, nr, nc, local_result, subidx, 0, x[SUB_W], h, k, y);
+			else
+				sum_col(v, nl, nr, nc, local_result, subidx, 0, x[SUB_W]);
 			if (local_id == 0)
 			{
 				psum = local_result[0];
@@ -498,7 +592,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
   		
 		if (block_id == group_job_id)
 		{
-			sum_col(v, nl, nr, nc, local_result, subidx, nc-1, x[SUB_E]);
+			if (do_endpoint)
+				sum_col_with_endpoint(nl, nr, nc, local_result, subidx, nc-1, x[SUB_E], h, k, y);
+			else
+				sum_col(v, nl, nr, nc, local_result, subidx, nc-1, x[SUB_E]);
 			if (local_id == 0)
 			{
 				psum = local_result[0];
@@ -596,10 +693,7 @@ void load_v_to_shared_with_endpoint(__global double *y, __global double *k, doub
 			v_cached_layer[index] = (j < nc-1) ? mad(h, A3D(k,n,i,j+1,nl,nr,nc), A3D(y,n,i,j+1,nl,nr,nc)) : v_value;
 		}
 	}
-	/* we have to save the boundaries of up to 5 layers to global memory since slope_fn_pack_gpu() will use them  */
-	/* if we need to model secondary path, all layers have to been saved to v[] */
-	bool save_to_global_cond = (i == 0) || (j == 0) || (i == nr - 1) || (j == nc - 1) || save_to_global;
-	if (save_to_global_cond) {
+	if (save_to_global) {
 		A3D(v,n,i,j,nl,nr,nc) = v_value;
 	}
 	if (save_to_local) {
@@ -788,6 +882,12 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__
 			}
 		}
 		if (model_secondary) {
+			/*** 
+			Some of these layers require other layers that are not in cache (i.e., not the 4 adjacent layers).
+			Some of them have been cached before, so simply save them to global memory when load_v_to_shared_with_endpoint() loads them.
+			However, layer spidx (layer 4) must be load earily since TIM layer (layer 1) will need it before layer 4 has been cached.
+			Because only the data and the current location (i_s, j_s) are used by these layers saved to global memory, there are no global synchronization issues.
+			***/
 			if (n==LAYER_SI) { //top silicon layer (layer 0, requires layer 2, 1)
 				psum = NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
 				   EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s) + 
@@ -918,7 +1018,7 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__
 		/* update the current cell's temperature	*/	   
 		A3D(dv,n,i,j,nl,nr,nc) = (A3D(p_cuboid,n,i,j,nl,nr,nc) + psum) / l[n].c;
 	}
-	slope_fn_pack_gpu(model, l, v, dv, nl, nr, nc, local_result, x);
+	slope_fn_pack_gpu(model, l, v, dv, nl, nr, nc, local_result, x, h, k ,y);
 }
 
 

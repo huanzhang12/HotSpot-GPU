@@ -12,9 +12,7 @@
 
 #include "util.h"
 #if GPGPU > 0
-/* aligned memory allocation */
-#include <malloc.h>
-#define calloc(nmemb, size) ({void* _ptr = valloc((nmemb) * (size)); memset(_ptr, 0, (nmemb) * (size)); _ptr;})
+#include "gpu.h"
 #endif
 
 int eq(double x, double y)
@@ -243,7 +241,11 @@ double ***dcuboid_tail(int nr, int nc, int nl, int xtra)
 	m[0] = (double **) calloc (nl * nr, sizeof(double *));
 	assert(m[0] != NULL);
 	/* the actual 3-d data array	*/
+#if GPGPU > 0
+	m[0][0] = (double *) gpu_allocate_cuboid_static((nl * nr * nc + xtra) * sizeof(double));
+#else
 	m[0][0] = (double *) calloc (nl * nr * nc + xtra, sizeof(double));
+#endif
 	assert(m[0][0] != NULL);
 
 	/* remaining pointers of the 1-d pointer array	*/
@@ -265,7 +267,11 @@ double ***dcuboid_tail(int nr, int nc, int nl, int xtra)
 
 void free_dcuboid(double ***m)
 {
+#if GPGPU > 0
+	gpu_free_cuboid_static(m[0][0]);
+#else
 	free(m[0][0]);
+#endif
 	free(m[0]);
 	free(m);
 }

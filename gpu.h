@@ -37,8 +37,11 @@ typedef struct gpu_config_t_st
 	cl_mem h_v;
 	cl_mem h_y;
 	cl_mem h_result;
+	cl_mem h_cuboid;
+	int h_cuboid_reference;
 	void* pinned_h_v;
 	void* pinned_h_y;
+	void* pinned_h_cuboid;
 	void* pinned_h_result;
 	cl_mem d_v;
 	cl_mem d_y, d_ytemp;
@@ -74,6 +77,9 @@ void gpu_init(gpu_config_t *config, grid_model_t *model);
 void gpu_destroy(gpu_config_t *config);
 void gpu_create_buffers(gpu_config_t *config, grid_model_t *model);
 void gpu_delete_buffers(gpu_config_t *config);
+
+void* gpu_allocate_cuboid_static(size_t size);
+void gpu_free_cuboid_static(void* cuboid);
 
 double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, double *h, double *yout);
 void rk4_core_gpu_kernel(gpu_config_t *config, void *model, cl_mem *d_y, cl_mem *d_k1, void *p, int n, double h, cl_mem *d_yout, cl_mem *d_ytemp, int do_maxdiff);
