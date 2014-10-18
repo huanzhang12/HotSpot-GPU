@@ -909,40 +909,40 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__
 				psum = NP_as(l,v_cached[0],n) + SP_as(l,v_cached[0],n) + 
 				   EP_as(l,v_cached[0],n) + WP_as(l,v_cached[0],n) + 
 				   ((A3D(v_cached[0],((n_s+2) & 3),i_s,j_s,nl_s,nr_s,nc_s)-v_cached[0][center_off])/l[metalidx].rz) + // metalidx
-				   ((A3D(v_cached[0],((n_s+1) & 3),i_s,j_s,nl_s,nr_s,nc_s)-v_cached[0][center_off])/l[n].rz); // n+1
+				   ((v_cached[0][below_off]-v_cached[0][center_off])/l[n].rz); // n+1
 			} else if (n==spidx) { //spreader layer (4, requires layer 1, 5)
 				psum = NP_as(l,v_cached[0],n) + SP_as(l,v_cached[0],n) + 
 				   EP_as(l,v_cached[0],n) + WP_as(l,v_cached[0],n) + 
 				   ((A3D(v,metalidx-1,i,j,nl,nr,nc)-v_cached[0][center_off])/l[metalidx-1].rz) + // must load from global memory (OK)
-				   ((A3D(v_cached[0],((n_s+1) & 3),i_s,j_s,nl_s,nr_s,nc_s)-v_cached[0][center_off])/l[n].rz); // hsidx
+				   ((v_cached[0][below_off]-v_cached[0][center_off])/l[n].rz); // hsidx
 			} else if (n==metalidx) { //metal layer (2, requires layer 3, 0)
 				psum = NP_as(l,v_cached[0],n) + SP_as(l,v_cached[0],n) + 
 				   EP_as(l,v_cached[0],n) + WP_as(l,v_cached[0],n) + 
-				   ((A3D(v_cached[0],((n_s+1) & 3),i_s,j_s,nl_s,nr_s,nc_s)-v_cached[0][center_off])/l[c4idx].rz) + // c4idx
+				   ((v_cached[0][below_off]-v_cached[0][center_off])/l[c4idx].rz) + // c4idx
 				   ((A3D(v_cached[0],((n_s-2) & 3),i_s,j_s,nl_s,nr_s,nc_s)-v_cached[0][center_off])/l[n].rz); // LAYER_SI
 			} else if (n==metalidx-1) { // TIM layer (1, requires layer 0, 4)
 				psum = NP_as(l,v_cached[0],n) + SP_as(l,v_cached[0],n) + 
 				   EP_as(l,v_cached[0],n) + WP_as(l,v_cached[0],n) + 
-				   ((A3D(v_cached[0],((n_s-1) & 3),i_s,j_s,nl_s,nr_s,nc_s)-v_cached[0][center_off])/l[metalidx-2].rz) + // metalidx-2
+				   ((v_cached[0][above_off]-v_cached[0][center_off])/l[metalidx-2].rz) + // metalidx-2
 				   ((A3D(v,spidx,i,j,nl,nr,nc)-v_cached[0][center_off])/l[n].rz); // must load from global memory (need it early)
 			} else if (n==c4idx) { //C4 layer (3, requires layer 6, 2)
 				psum = NP_as(l,v_cached[0],n) + SP_as(l,v_cached[0],n) + 
 				   EP_as(l,v_cached[0],n) + WP_as(l,v_cached[0],n) + 
 				   ((A3D(v,subidx,i,j,nl,nr,nc)-v_cached[0][center_off])/l[subidx].rz) + // must load from global memory (need it early)
-				   ((A3D(v_cached[0],((n_s-1) & 3),i_s,j_s,nl_s,nr_s,nc_s)-v_cached[0][center_off])/l[n].rz); // metalidx
+				   ((v_cached[0][above_off]-v_cached[0][center_off])/l[n].rz); // metalidx
 			} else if (n==subidx) { //Substrate layer (6, requires layer 7, 3)
 				psum = NP_as(l,v_cached[0],n) + SP_as(l,v_cached[0],n) + 
 				   EP_as(l,v_cached[0],n) + WP_as(l,v_cached[0],n) + 
-				   ((A3D(v_cached[0],((n_s+1) & 3),i_s,j_s,nl_s,nr_s,nc_s)-v_cached[0][center_off])/l[solderidx].rz) + // solderidx
+				   ((v_cached[0][below_off]-v_cached[0][center_off])/l[solderidx].rz) + // solderidx
 				   ((A3D(v,c4idx,i,j,nl,nr,nc)-v_cached[0][center_off])/l[n].rz); // must load from global memory (OK)
 			} else if (n==pcbidx) { //PCB layer (8, requires layer 7)
 				psum = NP_as(l,v_cached[0],n) + SP_as(l,v_cached[0],n) + 
 				   EP_as(l,v_cached[0],n) + WP_as(l,v_cached[0],n) + 
-				   ((A3D(v_cached[0],((n_s-1) & 3),i_s,j_s,nl_s,nr_s,nc_s)-v_cached[0][center_off])/l[n].rz); // solderidx
+				   ((v_cached[0][above_off]-v_cached[0][center_off])/l[n].rz); // solderidx
 			} else if (n==hsidx) { // heatsink layer (5, requires layer 4)
 				psum = NP_as(l,v_cached[0],n) + SP_as(l,v_cached[0],n) + 
 				   EP_as(l,v_cached[0],n) + WP_as(l,v_cached[0],n) + 
-				   ((A3D(v_cached[0],((n_s-1) & 3),i_s,j_s,nl_s,nr_s,nc_s)-v_cached[0][center_off])/l[spidx].rz); // spidx
+				   ((v_cached[0][above_off]-v_cached[0][center_off])/l[spidx].rz); // spidx
 			} else {
 				/* sum the currents(power values) to cells north, south, 
 			 	* east, west, above and below
