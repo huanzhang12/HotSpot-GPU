@@ -3,6 +3,7 @@
 #include <string.h>
 #include <math.h>
 #include <unistd.h>
+#include <time.h>
 
 #include "temperature_grid.h"
 #include "temperature.h"
@@ -199,6 +200,19 @@ void gpu_create_buffers(gpu_config_t *config, grid_model_t *model)
 	config->h_cuboid_reference = 0;
 }
 
+struct timespec gpu_perf_timediff(struct timespec start, struct timespec end)
+{
+	struct timespec temp;
+	if ((end.tv_nsec-start.tv_nsec)<0) {
+		temp.tv_sec = end.tv_sec-start.tv_sec-1;
+		temp.tv_nsec = 1000000000+end.tv_nsec-start.tv_nsec;
+	} else {
+		temp.tv_sec = end.tv_sec-start.tv_sec;
+		temp.tv_nsec = end.tv_nsec-start.tv_nsec;
+	}
+	return temp;
+}
+
 void* gpu_allocate_cuboid_static(size_t size)
 {
 	if (current_gpu_config == NULL || !current_gpu_config->gpu_enabled || size != current_gpu_config->vector_size) {
@@ -276,6 +290,9 @@ void gpu_init(gpu_config_t *config, grid_model_t *model)
 	int err;
 	current_gpu_config = config;
 	if (!config->gpu_enabled) {
+#if ENABLE_TIMER > 0
+		clock_gettime(CLOCK_MONOTONIC, &config->time_start);
+#endif
 		return;
 	}
 	
@@ -411,16 +428,26 @@ void gpu_init(gpu_config_t *config, grid_model_t *model)
 	printf("OpenCL initialized.\n");
 	
 	free(devices);
-	
+#if ENABLE_TIMER > 0
+	clock_gettime(CLOCK_MONOTONIC, &config->time_start);
+#endif
 }
 
 void gpu_destroy(gpu_config_t *config)
 {
-		
-	if (!config->gpu_enabled) { 
+#if ENABLE_TIMER > 0
+	clock_gettime(CLOCK_MONOTONIC, &config->time_end);
+	struct timespec time_diff = gpu_perf_timediff(config->time_start, config->time_end);
+#endif
+	if (!config->gpu_enabled) {
+#if ENABLE_TIMER > 0
+		printf("CPU Time: %ld.%09lds\n", time_diff.tv_sec, time_diff.tv_nsec);
+#endif
 		return;
 	}
-	
+#if ENABLE_TIMER > 0
+	printf("GPU Time: %ld.%09lds\n", time_diff.tv_sec, time_diff.tv_nsec);
+#endif
 	free(config->layer);
 	gpu_delete_buffers(config);
 
@@ -433,6 +460,7 @@ void gpu_destroy(gpu_config_t *config)
 	clReleaseCommandQueue(config->_cl_queue);
 	clReleaseProgram(config->_cl_program);
 	clReleaseContext(config->_cl_context);
+	current_gpu_config = NULL; // prevents pinned memory allocation
 	puts("OpenCL environment has been cleaned up.\n");
 }
 

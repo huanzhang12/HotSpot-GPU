@@ -518,7 +518,11 @@ int main(int argc, char **argv)
 
 	if(!lines)
 		fatal("no power numbers in trace file\n");
-		
+
+#if GPGPU > 0
+	gpu_destroy(&gpu_config);
+#endif
+
 	/* for computing average	*/
 	if (model->type == BLOCK_MODEL)
 		for(i=0; i < n; i++) {
@@ -589,9 +593,7 @@ int main(int argc, char **argv)
 	#endif
 
 	/* cleanup	*/
-#if GPGPU > 0
-	gpu_destroy(&gpu_config);
-#endif
+
 	fclose(pin);
 	if (do_transient)
 		fclose(tout);

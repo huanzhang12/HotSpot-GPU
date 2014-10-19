@@ -7,10 +7,12 @@
     #include "CL/cl.h"
 #endif
 
+#include <time.h>
 #include "gpu_rk4.h"
 
 // #define FLUSH_DEBUG
 // #define GPU_DEBUG_PRINT
+#define ENABLE_TIMER	1
 
 #ifdef FLUSH_DEBUG
 #define DEBUG_Flush(queue) clFlush(queue)
@@ -73,6 +75,12 @@ typedef struct gpu_config_t_st
 	gpu_grid_model_t model;
 	gpu_layer_t* layer;
 	size_t layer_size;
+
+#if ENABLE_TIMER > 0
+	/* for profiling */
+	struct timespec time_start;
+	struct timespec time_end;
+#endif
 		
 }gpu_config_t;
 
