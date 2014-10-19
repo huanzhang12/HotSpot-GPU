@@ -9,13 +9,17 @@
 
 #include "gpu_rk4.h"
 
-#define FLUSH_DEBUG
+// #define FLUSH_DEBUG
+// #define GPU_DEBUG_PRINT
 
 #ifdef FLUSH_DEBUG
 #define DEBUG_Flush(queue) clFlush(queue)
 #else
 #define DEBUG_Flush(queue) queue;
 #endif
+
+#define DEBUG_POS 100
+
 
 enum kernel_fn_grid_args 	{ GRID_CONST_MODEL, GRID_CONST_LAYER, GRID_IO_V, GRID_OUT_DV, GRID_NL, GRID_NR, GRID_NC, GRID_LOCALMEM, GRID_IN_CUBOID, GRID_H, GRID_IN_K, GRID_IN_Y };
 enum kernel_average_args 	{ AVG_IN_Y, AVG_IN_K1, AVG_IN_K2, AVG_IN_K3, AVG_IN_K4, AVG_H, AVG_OUT_YOUT, AVG_N, AVG_IN_YTEMP, AVG_LOCALMEM };

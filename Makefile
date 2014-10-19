@@ -197,8 +197,8 @@ lib: 	hotspot hotfloorplan
 gpu.o:  gpu.c rk4_kernel_str.c
 	$(CC) $(CFLAGS) -c gpu.c
 
-rk4_kernel_str.c: rk4.cl
-	cpp rk4.cl | xxd -i > rk4_kernel_str.c
+rk4_kernel_str.c: rk4.cl gpu_rk4.h
+	cat gpu_rk4.h rk4.cl | xxd -i > rk4_kernel_str.c
 
 filelist:
 	@echo $(FLPSRC) $(TEMPSRC) $(PACKSRC) $(BLKSRC) $(GRIDSRC) $(MISCSRC) \

@@ -252,6 +252,7 @@ void gpu_delete_buffers(gpu_config_t *config)
 
 void gpu_print_array(gpu_config_t *config, cl_mem d_mem, size_t offset, size_t size, char* msg)
 {
+#ifdef GPU_DEBUG_PRINT
 	int i;
 	double * buf = (double*)malloc(size * sizeof(double));
 	if (msg == NULL) {
@@ -261,6 +262,7 @@ void gpu_print_array(gpu_config_t *config, cl_mem d_mem, size_t offset, size_t s
 	for (i = 0; i < size; ++i) {
 		printf("%s%.*g\n", msg, 21, buf[i]);
 	}
+#endif
 }
 
 void gpu_init(gpu_config_t *config, grid_model_t *model)
@@ -270,6 +272,7 @@ void gpu_init(gpu_config_t *config, grid_model_t *model)
 	cl_uint value_size;
 	size_t info_size;
 	char* device_name;
+	char compiler_options[256];
 	int err;
 	current_gpu_config = config;
 	if (!config->gpu_enabled) {
@@ -326,8 +329,11 @@ void gpu_init(gpu_config_t *config, grid_model_t *model)
 	config->_cl_program = clCreateProgramWithSource(config->_cl_context, 1, (const char**)&config->_cl_kernel_string, &config->_cl_kernel_size, &err);
 	gpu_check_error(err, "Couldn't create the OpenCL program");
 	
+	sprintf(compiler_options, "-DENABLE_SECONDARY_MODEL=%d -DNUMBER_OF_LAYERS=%d -DLOCAL_SIZE_1=(size_t)%zu -DLOCAL_SIZE_0=(size_t)%zu -DNUMBER_OF_ROWS=(size_t)%d -DNUMBER_OF_COLS=(size_t)%d",
+			model->config.model_secondary, model->n_layers, config->local_work_size[1], config->local_work_size[0], model->rows, model->cols);
 	// Build OpenCL program
-	err = clBuildProgram(config->_cl_program, 0, NULL, NULL, NULL, NULL);
+	printf("compiling kernel with options: %s\n", compiler_options);
+	err = clBuildProgram(config->_cl_program, 0, NULL, compiler_options, NULL, NULL);
 	if(err < 0) {
 		char* build_log;
 		// Build failure, print log 
@@ -369,7 +375,7 @@ void gpu_init(gpu_config_t *config, grid_model_t *model)
 	err |= clSetKernelArg(config->_cl_kernel_rk4, GRID_NL, sizeof(model->n_layers), &model->n_layers);
 	err |= clSetKernelArg(config->_cl_kernel_rk4, GRID_NR, sizeof(model->rows), &model->rows);
 	err |= clSetKernelArg(config->_cl_kernel_rk4, GRID_NC, sizeof(model->cols), &model->cols);
-	err |= clSetKernelArg(config->_cl_kernel_rk4, GRID_LOCALMEM, 4 * (config->local_work_size[0] + 2) * (config->local_work_size[1] + 2) * config->element_size, NULL); // shared memory for 4 layers
+	err |= clSetKernelArg(config->_cl_kernel_rk4, GRID_LOCALMEM, 4 * (config->local_work_size[0] + 2) * (config->local_work_size[1] + 2) * config->element_size + config->extra_size, NULL); // shared memory for 4 layers
 	err |= clSetKernelArg(config->_cl_kernel_rk4, GRID_IN_CUBOID, sizeof(cl_mem), &config->d_p_cuboid);
 	// the 9th argument is h
 	err |= clSetKernelArg(config->_cl_kernel_rk4, GRID_IN_K, sizeof(cl_mem), &config->d_k1);
@@ -456,16 +462,18 @@ double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, dou
 	clEnqueueWriteBuffer(config->_cl_queue, config->d_p_cuboid, CL_FALSE, 0, buffer_size, ((grid_model_vector_t*)p)->cuboid[0][0], 0, NULL, NULL);
 	/* copy y to device */
 	clEnqueueWriteBuffer(config->_cl_queue, config->d_y, CL_FALSE, 0, buffer_size, y, 0, NULL, NULL);
-	// gpu_print_array(config, config->d_y, 0, 1, "y:\t");
+
 	/* evaluate the slope k1 at the beginning */
 	// slope_fn_grid_gpu_kernel(config, model, y, p, k1);
 	DEBUG_Flush(config->_cl_queue);
+	gpu_print_array(config, config->d_y, DEBUG_POS, 1, "y:\t");
+	gpu_print_array(config, config->d_p_cuboid, DEBUG_POS, 1, "cuboid:\t");
 	// clEnqueueReadBuffer(config->_cl_queue, config->d_y, CL_TRUE, 0, buffer_size, input, 0, NULL, NULL);
 	slope_fn_grid_gpu_kernel(config, model, &config->d_y, p, &config->d_k1);
 	// slope_fn_grid_gpu(config, model, input, p, output);
 	// clEnqueueWriteBuffer(config->_cl_queue, config->d_k1, CL_TRUE, 0, buffer_size, output, 0, NULL, NULL);
 
-	// gpu_print_array(config, config->d_k1, 0, 1, "k1:\t");
+	gpu_print_array(config, config->d_k1, DEBUG_POS, 1, "k1:\t");
 	/* try until accuracy is achieved	*/
 	do {
 		(*h) = new_h;
@@ -473,12 +481,12 @@ double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, dou
 		/* try RK4 once with normal step size	*/
 		// rk4_core_gpu_kernel(config, model, y, k1, p, n, (*h), ytemp, NULL, 0);
 		rk4_core_gpu_kernel(config, model, &config->d_y, &config->d_k1, p, n, (*h), &config->d_ytemp, NULL, 0);
-		// gpu_print_array(config, config->d_ytemp, 0, 1, "ytemp:\t");
+		gpu_print_array(config, config->d_ytemp, DEBUG_POS, 1, "ytemp:\t");
 		DEBUG_Flush(config->_cl_queue);
 		/* repeat it with two half-steps	*/
 		// rk4_core_gpu_kernel(config, model, y, k1, p, n, (*h)/2.0, t1, NULL, 0);
 		rk4_core_gpu_kernel(config, model, &config->d_y, &config->d_k1, p, n, (*h)/2.0, &config->d_t1, NULL, 0);
-		// gpu_print_array(config, config->d_t1, 0, 1, "t1:\t");
+		gpu_print_array(config, config->d_t1, DEBUG_POS, 1, "t1:\t");
 		DEBUG_Flush(config->_cl_queue);
 		/* y after 1st half-step is in t1. re-evaluate k1 for this	*/
 		// slope_fn_grid_gpu_kernel(config, model, t1, p, k1);
@@ -486,13 +494,13 @@ double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, dou
 		// slope_fn_grid_gpu(config, model, input, p, output);
 		// clEnqueueWriteBuffer(config->_cl_queue, config->d_k1, CL_TRUE, 0, buffer_size, output, 0, NULL, NULL);
 		slope_fn_grid_gpu_kernel(config, model, &config->d_t1, p, &config->d_k1);
-		// gpu_print_array(config, config->d_k1, 0, 1, "k1:\t");
+		gpu_print_array(config, config->d_k1, DEBUG_POS, 1, "k1:\t");
 		DEBUG_Flush(config->_cl_queue);
 		/* get output of the second half-step in t2	*/	
 		// rk4_core_gpu_kernel(config, model, t1, k1, p, n, (*h)/2.0, t2, ytemp, 1);
 		rk4_core_gpu_kernel(config, model, &config->d_t1, &config->d_k1, p, n, (*h)/2.0, &config->d_dv, &config->d_ytemp, 1);
-		// gpu_print_array(config, config->d_dv, 0, 1, "dv:\t");
-
+		gpu_print_array(config, config->d_dv, 0, 1, "dv:\t");
+		DEBUG_Flush(config->_cl_queue);
 		/* find the max diff between these two results:
 		 * use t1 to store the diff
 		 */
@@ -630,7 +638,7 @@ void rk4_core_gpu_kernel(gpu_config_t *config, void *model, cl_mem *d_y, cl_mem 
 	gpu_check_error(err, "Couldn't setup a OpenCL kernel argument in rk4_core_gpu_kernel()");
 	err = clEnqueueNDRangeKernel(config->_cl_queue, config->_cl_kernel_rk4, 2, NULL, config->global_work_size, config->local_work_size, 0, NULL, NULL);
 	gpu_check_error(err, "Cannot launch kernel rk4_core_gpu_kernel()!");
-	// gpu_print_array(config, config->d_k2, 0, 1, "core:k2:\t");
+	gpu_print_array(config, config->d_k2, DEBUG_POS, 1, "core:k2:\t");
 	/* k3 is the slope at the trial midpoint (t) found using
 	 * slope k2 found above.
 	 */
@@ -647,7 +655,7 @@ void rk4_core_gpu_kernel(gpu_config_t *config, void *model, cl_mem *d_y, cl_mem 
 	gpu_check_error(err, "Couldn't setup a OpenCL kernel argument in rk4_core_gpu_kernel()");
 	err = clEnqueueNDRangeKernel(config->_cl_queue, config->_cl_kernel_rk4, 2, NULL, config->global_work_size, config->local_work_size, 0, NULL, NULL);
 	gpu_check_error(err, "Cannot launch kernel rk4_core_gpu_kernel()!");
-	// gpu_print_array(config, config->d_k3, 0, 1, "core:k3:\t");
+	gpu_print_array(config, config->d_k3, DEBUG_POS, 1, "core:k3:\t");
 	/* k4 is the slope at trial endpoint (t) found using
 	 * slope k3 found above.
 	 */
@@ -666,7 +674,7 @@ void rk4_core_gpu_kernel(gpu_config_t *config, void *model, cl_mem *d_y, cl_mem 
 	gpu_check_error(err, "Couldn't setup a OpenCL kernel argument in rk4_core_gpu_kernel()");
 	err = clEnqueueNDRangeKernel(config->_cl_queue, config->_cl_kernel_rk4, 2, NULL, config->global_work_size, config->local_work_size, 0, NULL, NULL);
 	gpu_check_error(err, "Cannot launch kernel rk4_core_gpu_kernel()!");
-	// gpu_print_array(config, config->d_k4, 0, 1, "core:k4:\t");
+	gpu_print_array(config, config->d_k4, DEBUG_POS, 1, "core:k4:\t");
 	/* yout = y + h*(k1/6 + k2/3 + k3/3 + k4/6)	*/
 	// for (i =0; i < n; i++)
 	//	yout[i] = y[i] + h * (k1[i] + 2*k2[i] + 2*k3[i] + k4[i])/6.0;
@@ -693,17 +701,17 @@ void rk4_core_gpu_kernel(gpu_config_t *config, void *model, cl_mem *d_y, cl_mem 
 		err |= clSetKernelArg(config->_cl_kernel_average, AVG_IN_K1, sizeof(cl_mem), d_k1);
 		err |= clSetKernelArg(config->_cl_kernel_average, AVG_H, sizeof(h_real), &h_real);
 		err |= clSetKernelArg(config->_cl_kernel_average, AVG_OUT_YOUT, sizeof(cl_mem), d_yout);
-		// gpu_print_array(config, *d_y, 0, 1, "core:y:\t");
-		// gpu_print_array(config, *d_k1, 0, 1, "core:k1:\t");
-		// gpu_print_array(config, config->d_k2, 0, 1, "core:k2:\t");
-		// gpu_print_array(config, config->d_k3, 0, 1, "core:k3:\t");
-		// gpu_print_array(config, config->d_k4, 0, 1, "core:k4:\t");
+		gpu_print_array(config, *d_y, DEBUG_POS, 1, "core:y:\t");
+		gpu_print_array(config, *d_k1, DEBUG_POS, 1, "core:k1:\t");
+		gpu_print_array(config, config->d_k2, DEBUG_POS, 1, "core:k2:\t");
+		gpu_print_array(config, config->d_k3, DEBUG_POS, 1, "core:k3:\t");
+		gpu_print_array(config, config->d_k4, DEBUG_POS, 1, "core:k4:\t");
 		gpu_check_error(err, "Couldn't setup a OpenCL kernel argument in rk4_average()");
 		size_t avg_kernel_global_size = config->global_work_size[0] * config->global_work_size[1];
 		size_t avg_kernel_local_size = config->local_work_size[0] * config->local_work_size[1];
 		err = clEnqueueNDRangeKernel(config->_cl_queue, config->_cl_kernel_average, 1, NULL, &avg_kernel_global_size, &avg_kernel_local_size, 0, NULL, NULL);
 		gpu_check_error(err, "Cannot launch kernel rk4_average()!");
-		// gpu_print_array(config, *d_yout, 0, 1, "core:yout:\t");
+		gpu_print_array(config, *d_yout, DEBUG_POS, 1, "core:yout:\t");
 	}
 }
 
