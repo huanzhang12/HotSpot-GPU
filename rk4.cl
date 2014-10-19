@@ -160,6 +160,7 @@ void sum_col_with_endpoint(int nl, int nr, int nc, __local double *local_result,
 }
 
 __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__((max_constant_size(sizeof(gpu_grid_model_t)))), __constant gpu_layer_t *l __attribute__((max_constant_size(MAX_LAYER_SUPPORT*sizeof(gpu_layer_t)))), __global double *v, __global double *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local double *local_result, __local double *x, double h, __global double *k, __global double *y)
+// __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model, __constant gpu_layer_t *l, __global double *v, __global double *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local double *local_result, __local double *x, double h, __global double *k, __global double *y)
 {
 
 	/* sum of the currents(power values)	*/
@@ -177,7 +178,8 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 	int nr = model->rows;
 	int nc = model->cols;
 	*/
-	unsigned int nl_nr_nc_product = mul24(nl, nr) * nc;
+	/* point dv to the extra nodes */
+	dv += mul24(nl, nr) * nc;
 	int spidx, hsidx, metalidx, c4idx, subidx, solderidx, pcbidx;
 	
 	/* pointer to the starting address of the extra nodes (now passed as an argument)	*/
@@ -212,20 +214,20 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 		/* sink outer north/south	*/
 		psum = (ambient - x[SINK_N])/(pk->r_hs_per + pk->r_amb_per) + 
 			   (x[SINK_C_N] - x[SINK_N])/(pk->r_hs2_y + pk->r_hs);
-		dv[nl_nr_nc_product + SINK_N] = psum / (pk->c_hs_per + pk->c_amb_per);
+		dv[SINK_N] = psum / (pk->c_hs_per + pk->c_amb_per);
 	
 		psum = (ambient - x[SINK_S])/(pk->r_hs_per + pk->r_amb_per) + 
 			   (x[SINK_C_S] - x[SINK_S])/(pk->r_hs2_y + pk->r_hs);
-		dv[nl_nr_nc_product + SINK_S] = psum / (pk->c_hs_per + pk->c_amb_per);
+		dv[SINK_S] = psum / (pk->c_hs_per + pk->c_amb_per);
 	
 		/* sink outer west/east	*/
 		psum = (ambient - x[SINK_W])/(pk->r_hs_per + pk->r_amb_per) + 
 			   (x[SINK_C_W] - x[SINK_W])/(pk->r_hs2_x + pk->r_hs);
-		dv[nl_nr_nc_product + SINK_W] = psum / (pk->c_hs_per + pk->c_amb_per);
+		dv[SINK_W] = psum / (pk->c_hs_per + pk->c_amb_per);
 	
 		psum = (ambient - x[SINK_E])/(pk->r_hs_per + pk->r_amb_per) + 
 			   (x[SINK_C_E] - x[SINK_E])/(pk->r_hs2_x + pk->r_hs);
-		dv[nl_nr_nc_product + SINK_E] = psum / (pk->c_hs_per + pk->c_amb_per);
+		dv[SINK_E] = psum / (pk->c_hs_per + pk->c_amb_per);
 	}
 	
 	/* sink inner north/south	*/
@@ -243,7 +245,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			psum += (ambient - x[SINK_C_N])/(pk->r_hs_c_per_y + pk->r_amb_c_per_y) + 
 					(x[SP_N] - x[SINK_C_N])/pk->r_sp_per_y +
 					(x[SINK_N] - x[SINK_C_N])/(pk->r_hs2_y + pk->r_hs);
-			dv[nl_nr_nc_product + SINK_C_N] = psum / (pk->c_hs_c_per_y + pk->c_amb_c_per_y);
+			dv[SINK_C_N] = psum / (pk->c_hs_c_per_y + pk->c_amb_c_per_y);
 		}
 	}
 	group_job_id = (group_job_id + 1) & num_blocks_mask;
@@ -261,7 +263,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			psum += (ambient - x[SINK_C_S])/(pk->r_hs_c_per_y + pk->r_amb_c_per_y) + 
 					(x[SP_S] - x[SINK_C_S])/pk->r_sp_per_y +
 					(x[SINK_S] - x[SINK_C_S])/(pk->r_hs2_y + pk->r_hs);
-			dv[nl_nr_nc_product + SINK_C_S] = psum / (pk->c_hs_c_per_y + pk->c_amb_c_per_y);
+			dv[SINK_C_S] = psum / (pk->c_hs_c_per_y + pk->c_amb_c_per_y);
 		}
 	}
 	group_job_id = (group_job_id + 1) & num_blocks_mask;
@@ -281,7 +283,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			psum += (ambient - x[SINK_C_W])/(pk->r_hs_c_per_x + pk->r_amb_c_per_x) + 
 					(x[SP_W] - x[SINK_C_W])/pk->r_sp_per_x +
 					(x[SINK_W] - x[SINK_C_W])/(pk->r_hs2_x + pk->r_hs);
-			dv[nl_nr_nc_product + SINK_C_W] = psum / (pk->c_hs_c_per_x + pk->c_amb_c_per_x);
+			dv[SINK_C_W] = psum / (pk->c_hs_c_per_x + pk->c_amb_c_per_x);
 		}
 	}
 	group_job_id = (group_job_id + 1) & num_blocks_mask;
@@ -299,7 +301,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			psum += (ambient - x[SINK_C_E])/(pk->r_hs_c_per_x + pk->r_amb_c_per_x) + 
 					(x[SP_E] - x[SINK_C_E])/pk->r_sp_per_x +
 					(x[SINK_E] - x[SINK_C_E])/(pk->r_hs2_x + pk->r_hs);
-			dv[nl_nr_nc_product + SINK_C_E] = psum / (pk->c_hs_c_per_x + pk->c_amb_c_per_x);
+			dv[SINK_C_E] = psum / (pk->c_hs_c_per_x + pk->c_amb_c_per_x);
 		}
 	}
 	group_job_id = (group_job_id + 1) & num_blocks_mask;
@@ -317,7 +319,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			psum = local_result[0];
 			psum /= (l[spidx].ry / 2.0 + nc * pk->r_sp1_y);
 			psum += (x[SINK_C_N] - x[SP_N])/pk->r_sp_per_y;
-			dv[nl_nr_nc_product + SP_N] = psum / pk->c_sp_per_y;
+			dv[SP_N] = psum / pk->c_sp_per_y;
 		}
 	}
 	group_job_id = (group_job_id + 1) & num_blocks_mask;
@@ -333,7 +335,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			psum = local_result[0];
 			psum /= (l[spidx].ry / 2.0 + nc * pk->r_sp1_y);
 			psum += (x[SINK_C_S] - x[SP_S])/pk->r_sp_per_y;
-			dv[nl_nr_nc_product + SP_S] = psum / pk->c_sp_per_y;
+			dv[SP_S] = psum / pk->c_sp_per_y;
 		}
 	}
 	group_job_id = (group_job_id + 1) & num_blocks_mask;
@@ -351,7 +353,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			psum = local_result[0];
 			psum /= (l[spidx].rx / 2.0 + nr * pk->r_sp1_x);
 			psum += (x[SINK_C_W] - x[SP_W])/pk->r_sp_per_x;
-			dv[nl_nr_nc_product + SP_W] = psum / pk->c_sp_per_x;
+			dv[SP_W] = psum / pk->c_sp_per_x;
 		}
 	}
 	group_job_id = (group_job_id + 1) & num_blocks_mask;
@@ -367,7 +369,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			psum = local_result[0];
 			psum /= (l[spidx].rx / 2.0 + nr * pk->r_sp1_x);
 			psum += (x[SINK_C_E] - x[SP_E])/pk->r_sp_per_x;
-			dv[nl_nr_nc_product + SP_E] = psum / pk->c_sp_per_x;
+			dv[SP_E] = psum / pk->c_sp_per_x;
 		}
 	}
 	
@@ -380,18 +382,18 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 		{
 			psum = (ambient - x[PCB_N])/(pk->r_amb_sec_per) + 
 				   (x[PCB_C_N] - x[PCB_N])/(pk->r_pcb2_y + pk->r_pcb);
-			dv[nl_nr_nc_product + PCB_N] = psum / (pk->c_pcb_per + pk->c_amb_sec_per);
+			dv[PCB_N] = psum / (pk->c_pcb_per + pk->c_amb_sec_per);
 			psum = (ambient - x[PCB_S])/(pk->r_amb_sec_per) + 
 				   (x[PCB_C_S] - x[PCB_S])/(pk->r_pcb2_y + pk->r_pcb);
-			dv[nl_nr_nc_product + PCB_S] = psum / (pk->c_pcb_per + pk->c_amb_sec_per);
+			dv[PCB_S] = psum / (pk->c_pcb_per + pk->c_amb_sec_per);
   	
 			/* PCB outer west/east	*/
 			psum = (ambient - x[PCB_W])/(pk->r_amb_sec_per) + 
 				   (x[PCB_C_W] - x[PCB_W])/(pk->r_pcb2_x + pk->r_pcb);
-			dv[nl_nr_nc_product + PCB_W] = psum / (pk->c_pcb_per + pk->c_amb_sec_per);
+			dv[PCB_W] = psum / (pk->c_pcb_per + pk->c_amb_sec_per);
 			psum = (ambient - x[PCB_E])/(pk->r_amb_sec_per) + 
 				   (x[PCB_C_E] - x[PCB_E])/(pk->r_pcb2_x + pk->r_pcb);
-			dv[nl_nr_nc_product + PCB_E] = psum / (pk->c_pcb_per + pk->c_amb_sec_per);
+			dv[PCB_E] = psum / (pk->c_pcb_per + pk->c_amb_sec_per);
 		}
 		group_job_id = (group_job_id + 1) & num_blocks_mask;
   	
@@ -410,7 +412,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 				psum += (ambient - x[PCB_C_N])/(pk->r_amb_sec_c_per_y) + 
 						(x[SOLDER_N] - x[PCB_C_N])/pk->r_pcb_c_per_y +
 						(x[PCB_N] - x[PCB_C_N])/(pk->r_pcb2_y + pk->r_pcb);
-				dv[nl_nr_nc_product + PCB_C_N] = psum / (pk->c_pcb_c_per_y + pk->c_amb_sec_c_per_y);
+				dv[PCB_C_N] = psum / (pk->c_pcb_c_per_y + pk->c_amb_sec_c_per_y);
 			}
 		}
 		group_job_id = (group_job_id + 1) & num_blocks_mask;
@@ -428,7 +430,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 				psum += (ambient - x[PCB_C_S])/(pk->r_amb_sec_c_per_y) + 
 						(x[SOLDER_S] - x[PCB_C_S])/pk->r_pcb_c_per_y +
 						(x[PCB_S] - x[PCB_C_S])/(pk->r_pcb2_y + pk->r_pcb);
-				dv[nl_nr_nc_product + PCB_C_S] = psum / (pk->c_pcb_c_per_y + pk->c_amb_sec_c_per_y);
+				dv[PCB_C_S] = psum / (pk->c_pcb_c_per_y + pk->c_amb_sec_c_per_y);
 			}
 		}
 		group_job_id = (group_job_id + 1) & num_blocks_mask;
@@ -448,7 +450,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 				psum += (ambient - x[PCB_C_W])/(pk->r_amb_sec_c_per_x) + 
 						(x[SOLDER_W] - x[PCB_C_W])/pk->r_pcb_c_per_x +
 						(x[PCB_W] - x[PCB_C_W])/(pk->r_pcb2_x + pk->r_pcb);
-				dv[nl_nr_nc_product + PCB_C_W] = psum / (pk->c_pcb_c_per_x + pk->c_amb_sec_c_per_x);
+				dv[PCB_C_W] = psum / (pk->c_pcb_c_per_x + pk->c_amb_sec_c_per_x);
 			}
 		}
 		group_job_id = (group_job_id + 1) & num_blocks_mask;
@@ -466,7 +468,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 				psum += (ambient - x[PCB_C_E])/(pk->r_amb_sec_c_per_x) + 
 						(x[SOLDER_E] - x[PCB_C_E])/pk->r_pcb_c_per_x +
 						(x[PCB_E] - x[PCB_C_E])/(pk->r_pcb2_x + pk->r_pcb);
-				dv[nl_nr_nc_product + PCB_C_E] = psum / (pk->c_pcb_c_per_x + pk->c_amb_sec_c_per_x);
+				dv[PCB_C_E] = psum / (pk->c_pcb_c_per_x + pk->c_amb_sec_c_per_x);
 			}
 		}
 		group_job_id = (group_job_id + 1) & num_blocks_mask;
@@ -484,7 +486,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 				psum = local_result[0];
 				psum /= (l[solderidx].ry / 2.0 + nc * pk->r_solder1_y);
 				psum += (x[PCB_C_N] - x[SOLDER_N])/pk->r_pcb_c_per_y;
-				dv[nl_nr_nc_product + SOLDER_N] = psum / pk->c_solder_per_y;
+				dv[SOLDER_N] = psum / pk->c_solder_per_y;
 			}
 		}
 		group_job_id = (group_job_id + 1) & num_blocks_mask;
@@ -500,7 +502,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 				psum = local_result[0];
 				psum /= (l[solderidx].ry / 2.0 + nc * pk->r_solder1_y);
 				psum += (x[PCB_C_S] - x[SOLDER_S])/pk->r_pcb_c_per_y;
-				dv[nl_nr_nc_product + SOLDER_S] = psum / pk->c_solder_per_y;
+				dv[SOLDER_S] = psum / pk->c_solder_per_y;
 			}
 		}
 		group_job_id = (group_job_id + 1) & num_blocks_mask;
@@ -518,7 +520,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 				psum = local_result[0];
 				psum /= (l[solderidx].rx / 2.0 + nr * pk->r_solder1_x);
 				psum += (x[PCB_C_W] - x[SOLDER_W])/pk->r_pcb_c_per_x;
-				dv[nl_nr_nc_product + SOLDER_W] = psum / pk->c_solder_per_x;
+				dv[SOLDER_W] = psum / pk->c_solder_per_x;
 			}
 		}
 		group_job_id = (group_job_id + 1) & num_blocks_mask;
@@ -534,7 +536,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 				psum = local_result[0];
 				psum /= (l[solderidx].rx / 2.0 + nr * pk->r_solder1_x);
 				psum += (x[PCB_C_E] - x[SOLDER_E])/pk->r_pcb_c_per_x;
-				dv[nl_nr_nc_product + SOLDER_E] = psum / pk->c_solder_per_x;
+				dv[SOLDER_E] = psum / pk->c_solder_per_x;
 			}
 		}
 		group_job_id = (group_job_id + 1) & num_blocks_mask;
@@ -552,7 +554,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 				psum = local_result[0];
 				psum /= (l[subidx].ry / 2.0 + nc * pk->r_sub1_y);
 				psum += (x[SOLDER_N] - x[SUB_N])/pk->r_solder_per_y;
-				dv[nl_nr_nc_product + SUB_N] = psum / pk->c_sub_per_y;
+				dv[SUB_N] = psum / pk->c_sub_per_y;
 			}
 		}
 		group_job_id = (group_job_id + 1) & num_blocks_mask;
@@ -568,7 +570,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 				psum = local_result[0];
 				psum /= (l[subidx].ry / 2.0 + nc * pk->r_sub1_y);
 				psum += (x[SOLDER_S] - x[SUB_S])/pk->r_solder_per_y;
-				dv[nl_nr_nc_product + SUB_S] = psum / pk->c_sub_per_y;
+				dv[SUB_S] = psum / pk->c_sub_per_y;
 			}
 		}
 		group_job_id = (group_job_id + 1) & num_blocks_mask;
@@ -586,7 +588,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 				psum = local_result[0];
 				psum /= (l[subidx].rx / 2.0 + nr * pk->r_sub1_x);
 				psum += (x[SOLDER_W] - x[SUB_W])/pk->r_solder_per_x;
-				dv[nl_nr_nc_product + SUB_W] = psum / pk->c_sub_per_x;
+				dv[SUB_W] = psum / pk->c_sub_per_x;
 			}
 		}
 		group_job_id = (group_job_id + 1) & num_blocks_mask;
@@ -602,7 +604,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 				psum = local_result[0];
 				psum /= (l[subidx].rx / 2.0 + nr * pk->r_sub1_x);
 				psum += (x[SOLDER_E] - x[SUB_E])/pk->r_solder_per_x;
-				dv[nl_nr_nc_product + SUB_E] = psum / pk->c_sub_per_x;
+				dv[SUB_E] = psum / pk->c_sub_per_x;
 			}
 		}
 	}
@@ -799,25 +801,13 @@ __kernel void slope_fn_grid_gpu_test(__constant gpu_grid_model_t *model __attrib
  * so, slope = dV = [P + sum{(Ti-T)/Ri}]/C
  */
 __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__((max_constant_size(sizeof(gpu_grid_model_t)))), __constant gpu_layer_t *l __attribute__((max_constant_size(MAX_LAYER_SUPPORT*sizeof(gpu_layer_t)))), __global double *v, __global double *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local double *local_result, __global double *p_cuboid, double h, __global double *k, __global double *y)
+// __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model, __constant gpu_layer_t *l, __global double *v, __global double *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local double *local_result, __global double *p_cuboid, double h, __global double *k, __global double *y)
 {
 	int n;
-	int i = get_global_id(1); // row (row-major)
-	int j = get_global_id(0); // column
-	
-	/* sum of the currents(power values)	*/
-	double psum;
-	
-	/* shortcuts for cell width(cw) and cell height(ch)	*/
-	double cw = model->width / model->cols;
-	double ch = model->height / model->rows;
 
 	/* shortcuts	*/
 	int spidx, hsidx, metalidx, c4idx, subidx, solderidx, pcbidx;
 	bool model_secondary = model->config.model_secondary;
-	double ambient = model->config.ambient;
-	double s_pcb = model->config.s_pcb;
-	/* pointer to the starting address of the extra nodes	*/
-	// __global double *x = v + mul24(nl, nr) * nc;
 	
 	if (!model_secondary) {
 		spidx = nl - DEFAULT_PACK_LAYERS + LAYER_SP;
@@ -862,11 +852,7 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__
 		load_v_to_shared_with_endpoint(y, k, h, v_cached[0], subidx, nl, nr, nc, v, 0, 1); // v = y + k * h
 	}
 	uint next_layer = n - 1;
-	/* for local memory access */
-	int i_s = get_local_id(1) + 1;
-	int j_s = get_local_id(0) + 1;
-	int nr_s = get_local_size(1) + 2;
-	int nc_s = get_local_size(0) + 2;
+
 	/* load extra nodes to local memory */
 	if (do_endpoint) {
 		load_extra_to_shared_with_endpoint(y + mul24(nl, nr) * nc, k + mul24(nl, nr) * nc, h, x, model_secondary ? (EXTRA + EXTRA_SEC) : (EXTRA));
@@ -874,6 +860,17 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__
 	else {
 		load_extra_to_shared(v + mul24(nl, nr) * nc, x, model_secondary ? (EXTRA + EXTRA_SEC) : (EXTRA));
 	}
+
+	/* for local memory access */
+	int i_s = get_local_id(1) + 1;
+	int j_s = get_local_id(0) + 1;
+	int nr_s = get_local_size(1) + 2;
+	int nc_s = get_local_size(0) + 2;
+	/* for global memory access */
+	int i = get_global_id(1); // row (row-major)
+	int j = get_global_id(0); // column
+	/* sum of the currents(power values)	*/
+	double psum;
 	
 	/* for each grid cell	*/
 	for(n=0; n < nl; n++) {
@@ -981,7 +978,7 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__
 		/* heatsink core is connected to its inner periphery and ambient	*/
 		} else if (n == hsidx) {
 			/* all nodes are connected to the ambient	*/
-			psum += (ambient - v_cached[0][center_off])/l[n].rz;
+			psum += (model->config.ambient - v_cached[0][center_off])/l[n].rz;
 			/* northern boundary - edge cell has half the ry	*/
 			if (i == 0)
 				psum += (x[SINK_C_N] - v_cached[0][center_off])/(l[n].ry/2.0 + nc*model->pack.r_hs1_y); 
@@ -996,8 +993,8 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__
 				psum += (x[SINK_C_W] - v_cached[0][center_off])/(l[n].rx/2.0 + nr*model->pack.r_hs1_x); 
 		}	else if (n == pcbidx && model_secondary) {
 			/* all nodes are connected to the ambient	*/
-			psum += (ambient - v_cached[0][center_off])/(model->config.r_convec_sec * 
-						   (s_pcb * s_pcb) / (cw * ch));
+			psum += (model->config.ambient - v_cached[0][center_off])/(model->config.r_convec_sec * 
+						   (model->config.s_pcb * model->config.s_pcb) / ((model->width / nc) * (model->height / nr)));
 			/* northern boundary - edge cell has half the ry	*/
 			if (i == 0)
 				psum += (x[PCB_C_N] - v_cached[0][center_off])/(l[n].ry/2.0 + nc*model->pack.r_pcb1_y); 
