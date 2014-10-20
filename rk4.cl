@@ -168,12 +168,6 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 // __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model, __constant gpu_layer_t *l, __global double *v, __global double *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local double *local_result, __local double *x, double h, __global double *k, __global double *y)
 {
 
-	/* sum of the currents(power values)	*/
-	double psum;
-	
-	/* shortcuts	*/
-	__constant gpu_package_RC_t *pk = &model->pack;
-	double ambient = model->config.ambient;
 	/* l is not used */
 	// layer_t *l = model->layers;
 	// bool model_secondary = model->config.model_secondary;
@@ -192,13 +186,14 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 	// __global double *x = v + nl_nr_nc_product;
 
 	unsigned int block_id = mad24(get_group_id(1), get_num_groups(0), get_group_id(0));
-	unsigned int thread_id = mad24(get_global_id(1), NUMBER_OF_ROWS, get_global_id(0));
+	// unsigned int thread_id = mad24(get_global_id(1), NUMBER_OF_ROWS, get_global_id(0));
 	unsigned int local_id = mad24(get_local_id(1), LOCAL_SIZE_0, get_local_id(0));
 	unsigned int num_blocks_mask = (0x1u << (31 - clz(mul24(NUM_GROUPS_1, NUM_GROUPS_0)))) - 0x1u;
+	uint threads_per_group = mul24(LOCAL_SIZE_0, LOCAL_SIZE_1);
+	// unsigned int num_blocks_mask = (0x1u << (31 - clz(mul24(get_num_groups(1), get_num_groups(0))))) - 0x1u;
 
 	/* Do we need to calculate endpoint instead of reading it directly? */
 	bool do_endpoint = (h != 0.0);
-
 	
 	if (!model_secondary) {
 		spidx = nl - DEFAULT_PACK_LAYERS + LAYER_SP;
@@ -213,32 +208,56 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 		pcbidx = nl - SEC_PACK_LAYERS + LAYER_PCB;		
 	}
 	
+	/* shortcuts	*/
+	__constant gpu_package_RC_t *pk = &model->pack;
+	double ambient = model->config.ambient;
+	/* sum of the currents(power values)	*/
+	double psum;
+
 	/* First block: sink outer computation */
-	if (thread_id == 0)
+	if (block_id == (0 & num_blocks_mask))
 	{
+		
 		/* sink outer north/south	*/
-		psum = (ambient - x[SINK_N])/(pk->r_hs_per + pk->r_amb_per) + 
-			   (x[SINK_C_N] - x[SINK_N])/(pk->r_hs2_y + pk->r_hs);
-		dv[SINK_N] = psum / (pk->c_hs_per + pk->c_amb_per);
-	
-		psum = (ambient - x[SINK_S])/(pk->r_hs_per + pk->r_amb_per) + 
-			   (x[SINK_C_S] - x[SINK_S])/(pk->r_hs2_y + pk->r_hs);
-		dv[SINK_S] = psum / (pk->c_hs_per + pk->c_amb_per);
-	
-		/* sink outer west/east	*/
-		psum = (ambient - x[SINK_W])/(pk->r_hs_per + pk->r_amb_per) + 
-			   (x[SINK_C_W] - x[SINK_W])/(pk->r_hs2_x + pk->r_hs);
-		dv[SINK_W] = psum / (pk->c_hs_per + pk->c_amb_per);
-	
-		psum = (ambient - x[SINK_E])/(pk->r_hs_per + pk->r_amb_per) + 
-			   (x[SINK_C_E] - x[SINK_E])/(pk->r_hs2_x + pk->r_hs);
-		dv[SINK_E] = psum / (pk->c_hs_per + pk->c_amb_per);
+		if (local_id == 0)
+		{
+			/* sink outer north/south	*/
+			psum = (ambient - x[SINK_N])/(pk->r_hs_per + pk->r_amb_per) + 
+					 (x[SINK_C_N] - x[SINK_N])/(pk->r_hs2_y + pk->r_hs);
+			dv[SINK_N] = psum / (pk->c_hs_per + pk->c_amb_per);
+		
+			psum = (ambient - x[SINK_S])/(pk->r_hs_per + pk->r_amb_per) + 
+					 (x[SINK_C_S] - x[SINK_S])/(pk->r_hs2_y + pk->r_hs);
+			dv[SINK_S] = psum / (pk->c_hs_per + pk->c_amb_per);
+		}
+		else if (local_id == 1)
+		{
+			/* sink outer west/east	*/
+			psum = (ambient - x[SINK_W])/(pk->r_hs_per + pk->r_amb_per) + 
+					 (x[SINK_C_W] - x[SINK_W])/(pk->r_hs2_x + pk->r_hs);
+			dv[SINK_W] = psum / (pk->c_hs_per + pk->c_amb_per);
+		
+			psum = (ambient - x[SINK_E])/(pk->r_hs_per + pk->r_amb_per) + 
+					 (x[SINK_C_E] - x[SINK_E])/(pk->r_hs2_x + pk->r_hs);
+			dv[SINK_E] = psum / (pk->c_hs_per + pk->c_amb_per);
+		}
 	}
+
 	
-	/* sink inner north/south	*/
+
+/* sink inner north/south	*/
 	/* partition r_hs1_y among all the nc grid cells. edge cell has half the ry	*/
 	if (block_id == (1 & num_blocks_mask))
 	{
+		if (local_id == 0)
+		{
+			local_result[threads_per_group] = (l[hsidx].ry / 2.0 + nc * pk->r_hs1_y);	
+		}
+		if (local_id == 1)
+		{
+			local_result[threads_per_group+1] = (x[SP_N] - x[SINK_C_N])/pk->r_sp_per_y +
+					(x[SINK_N] - x[SINK_C_N])/(pk->r_hs2_y + pk->r_hs);
+		}
 		if (do_endpoint)		
 			sum_row_with_endpoint(nl, nr, nc, local_result, hsidx, 0, x[SINK_C_N], h, k, y);
 		else
@@ -246,16 +265,23 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 		if (local_id == 0)
 		{
 			psum = local_result[0];
-			psum /= (l[hsidx].ry / 2.0 + nc * pk->r_hs1_y);
-			psum += (ambient - x[SINK_C_N])/(pk->r_hs_c_per_y + pk->r_amb_c_per_y) + 
-					(x[SP_N] - x[SINK_C_N])/pk->r_sp_per_y +
-					(x[SINK_N] - x[SINK_C_N])/(pk->r_hs2_y + pk->r_hs);
+			psum /= local_result[threads_per_group];
+			psum += (ambient - x[SINK_C_N])/(pk->r_hs_c_per_y + pk->r_amb_c_per_y) + local_result[threads_per_group+1];
 			dv[SINK_C_N] = psum / (pk->c_hs_c_per_y + pk->c_amb_c_per_y);
 		}
 	}
-	
+		
 	if (block_id == (2 & num_blocks_mask))
 	{
+		if (local_id == 0)
+		{
+			local_result[threads_per_group] = (l[hsidx].ry / 2.0 + nc * pk->r_hs1_y);	
+		}
+		if (local_id == 1)
+		{
+			local_result[threads_per_group+1] = (x[SP_S] - x[SINK_C_S])/pk->r_sp_per_y +
+					(x[SINK_S] - x[SINK_C_S])/(pk->r_hs2_y + pk->r_hs);
+		}
 		if (do_endpoint)	
 			sum_row_with_endpoint(nl, nr, nc, local_result, hsidx, nr-1, x[SINK_C_S], h, k, y);
 		else
@@ -263,10 +289,8 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 		if (local_id == 0)
 		{
 			psum = local_result[0];
-			psum /= (l[hsidx].ry / 2.0 + nc * pk->r_hs1_y);
-			psum += (ambient - x[SINK_C_S])/(pk->r_hs_c_per_y + pk->r_amb_c_per_y) + 
-					(x[SP_S] - x[SINK_C_S])/pk->r_sp_per_y +
-					(x[SINK_S] - x[SINK_C_S])/(pk->r_hs2_y + pk->r_hs);
+			psum /= local_result[threads_per_group];
+			psum += (ambient - x[SINK_C_S])/(pk->r_hs_c_per_y + pk->r_amb_c_per_y) + local_result[threads_per_group+1];
 			dv[SINK_C_S] = psum / (pk->c_hs_c_per_y + pk->c_amb_c_per_y);
 		}
 	}
@@ -275,6 +299,15 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 	/* partition r_hs1_x among all the nr grid cells. edge cell has half the rx	*/
 	if (block_id == (3 & num_blocks_mask))
 	{
+		if (local_id == 0)
+		{
+			local_result[threads_per_group] = (l[hsidx].rx / 2.0 + nr * pk->r_hs1_x);	
+		}
+		if (local_id == 1)
+		{
+			local_result[threads_per_group+1] = (x[SP_W] - x[SINK_C_W])/pk->r_sp_per_x +
+					(x[SINK_W] - x[SINK_C_W])/(pk->r_hs2_x + pk->r_hs);
+		}
 		if (do_endpoint)
 			sum_col_with_endpoint(nl, nr, nc, local_result, hsidx, 0, x[SINK_C_W], h, k, y);
 		else
@@ -282,16 +315,23 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 		if (local_id == 0)
 		{
 			psum = local_result[0];
-			psum /= (l[hsidx].rx / 2.0 + nr * pk->r_hs1_x);
-			psum += (ambient - x[SINK_C_W])/(pk->r_hs_c_per_x + pk->r_amb_c_per_x) + 
-					(x[SP_W] - x[SINK_C_W])/pk->r_sp_per_x +
-					(x[SINK_W] - x[SINK_C_W])/(pk->r_hs2_x + pk->r_hs);
+			psum /= local_result[threads_per_group];
+			psum += (ambient - x[SINK_C_W])/(pk->r_hs_c_per_x + pk->r_amb_c_per_x) + local_result[threads_per_group+1];
 			dv[SINK_C_W] = psum / (pk->c_hs_c_per_x + pk->c_amb_c_per_x);
 		}
 	}
 
 	if (block_id == (4 & num_blocks_mask))
 	{
+		if (local_id == 0)
+		{
+			local_result[threads_per_group] = (l[hsidx].rx / 2.0 + nr * pk->r_hs1_x);	
+		}
+		if (local_id == 1)
+		{
+			local_result[threads_per_group+1] = (x[SP_E] - x[SINK_C_E])/pk->r_sp_per_x +
+					(x[SINK_E] - x[SINK_C_E])/(pk->r_hs2_x + pk->r_hs);
+		}
 		if (do_endpoint)
 			sum_col_with_endpoint(nl, nr, nc, local_result, hsidx, nc-1, x[SINK_C_E], h, k, y);
 		else
@@ -299,10 +339,8 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 		if (local_id == 0)
 		{
 			psum = local_result[0];
-			psum /= (l[hsidx].rx / 2.0 + nr * pk->r_hs1_x);
-			psum += (ambient - x[SINK_C_E])/(pk->r_hs_c_per_x + pk->r_amb_c_per_x) + 
-					(x[SP_E] - x[SINK_C_E])/pk->r_sp_per_x +
-					(x[SINK_E] - x[SINK_C_E])/(pk->r_hs2_x + pk->r_hs);
+			psum /= local_result[threads_per_group];
+			psum += (ambient - x[SINK_C_E])/(pk->r_hs_c_per_x + pk->r_amb_c_per_x) + local_result[threads_per_group+1];
 			dv[SINK_C_E] = psum / (pk->c_hs_c_per_x + pk->c_amb_c_per_x);
 		}
 	}
@@ -373,30 +411,44 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 	
 	if (model_secondary) {
 		
-		/* PCB outer north/south	*/
-		bool is_local_id_zero = (block_id == (9 & num_blocks_mask)) && (local_id == 0);
-		if (is_local_id_zero)
+		if (block_id == (9 & num_blocks_mask))
 		{
-			psum = (ambient - x[PCB_N])/(pk->r_amb_sec_per) + 
-				   (x[PCB_C_N] - x[PCB_N])/(pk->r_pcb2_y + pk->r_pcb);
-			dv[PCB_N] = psum / (pk->c_pcb_per + pk->c_amb_sec_per);
-			psum = (ambient - x[PCB_S])/(pk->r_amb_sec_per) + 
-				   (x[PCB_C_S] - x[PCB_S])/(pk->r_pcb2_y + pk->r_pcb);
-			dv[PCB_S] = psum / (pk->c_pcb_per + pk->c_amb_sec_per);
+			/* PCB outer north/south	*/
+			if (local_id == 0)
+			{
+				psum = (ambient - x[PCB_N])/(pk->r_amb_sec_per) + 
+						 (x[PCB_C_N] - x[PCB_N])/(pk->r_pcb2_y + pk->r_pcb);
+				dv[PCB_N] = psum / (pk->c_pcb_per + pk->c_amb_sec_per);
+				psum = (ambient - x[PCB_S])/(pk->r_amb_sec_per) + 
+						 (x[PCB_C_S] - x[PCB_S])/(pk->r_pcb2_y + pk->r_pcb);
+				dv[PCB_S] = psum / (pk->c_pcb_per + pk->c_amb_sec_per);
+			}
   	
 			/* PCB outer west/east	*/
-			psum = (ambient - x[PCB_W])/(pk->r_amb_sec_per) + 
-				   (x[PCB_C_W] - x[PCB_W])/(pk->r_pcb2_x + pk->r_pcb);
-			dv[PCB_W] = psum / (pk->c_pcb_per + pk->c_amb_sec_per);
-			psum = (ambient - x[PCB_E])/(pk->r_amb_sec_per) + 
-				   (x[PCB_C_E] - x[PCB_E])/(pk->r_pcb2_x + pk->r_pcb);
-			dv[PCB_E] = psum / (pk->c_pcb_per + pk->c_amb_sec_per);
+			if (local_id == 1)
+			{
+				psum = (ambient - x[PCB_W])/(pk->r_amb_sec_per) + 
+						 (x[PCB_C_W] - x[PCB_W])/(pk->r_pcb2_x + pk->r_pcb);
+				dv[PCB_W] = psum / (pk->c_pcb_per + pk->c_amb_sec_per);
+				psum = (ambient - x[PCB_E])/(pk->r_amb_sec_per) + 
+						 (x[PCB_C_E] - x[PCB_E])/(pk->r_pcb2_x + pk->r_pcb);
+				dv[PCB_E] = psum / (pk->c_pcb_per + pk->c_amb_sec_per);
+			}
 		}
   	
 		/* PCB inner north/south	*/
 		/* partition r_pcb1_y among all the nc grid cells. edge cell has half the ry	*/
 		if (block_id == (10 & num_blocks_mask))
 		{
+			if (local_id == 0)
+			{
+				local_result[threads_per_group] = (l[pcbidx].ry / 2.0 + nc * pk->r_pcb1_y);	
+			}
+			if (local_id == 1)
+			{
+				local_result[threads_per_group+1] = (x[SOLDER_N] - x[PCB_C_N])/pk->r_pcb_c_per_y +
+						(x[PCB_N] - x[PCB_C_N])/(pk->r_pcb2_y + pk->r_pcb);
+			}
 			if (do_endpoint)
 				sum_row_with_endpoint(nl, nr, nc, local_result, pcbidx, 0, x[PCB_C_N], h, k, y);
 			else
@@ -404,16 +456,23 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			if (local_id == 0)
 			{
 				psum = local_result[0];
-				psum /= (l[pcbidx].ry / 2.0 + nc * pk->r_pcb1_y);
-				psum += (ambient - x[PCB_C_N])/(pk->r_amb_sec_c_per_y) + 
-						(x[SOLDER_N] - x[PCB_C_N])/pk->r_pcb_c_per_y +
-						(x[PCB_N] - x[PCB_C_N])/(pk->r_pcb2_y + pk->r_pcb);
+				psum /= local_result[threads_per_group];
+				psum += (ambient - x[PCB_C_N])/(pk->r_amb_sec_c_per_y) + local_result[threads_per_group+1];
 				dv[PCB_C_N] = psum / (pk->c_pcb_c_per_y + pk->c_amb_sec_c_per_y);
 			}
 		}
   		
 		if (block_id == (11 & num_blocks_mask))
 		{
+			if (local_id == 0)
+			{
+				local_result[threads_per_group] = (l[pcbidx].ry / 2.0 + nc * pk->r_pcb1_y);	
+			}
+			if (local_id == 1)
+			{
+				local_result[threads_per_group+1] = (x[SOLDER_S] - x[PCB_C_S])/pk->r_pcb_c_per_y +
+						(x[PCB_S] - x[PCB_C_S])/(pk->r_pcb2_y + pk->r_pcb);
+			}			
 			if (do_endpoint)
 				sum_row_with_endpoint(nl, nr, nc, local_result, pcbidx, nr-1, x[PCB_C_S], h, k, y);
 			else
@@ -421,10 +480,8 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			if (local_id == 0)
 			{
 				psum = local_result[0];
-				psum /= (l[pcbidx].ry / 2.0 + nc * pk->r_pcb1_y);
-				psum += (ambient - x[PCB_C_S])/(pk->r_amb_sec_c_per_y) + 
-						(x[SOLDER_S] - x[PCB_C_S])/pk->r_pcb_c_per_y +
-						(x[PCB_S] - x[PCB_C_S])/(pk->r_pcb2_y + pk->r_pcb);
+				psum /= local_result[threads_per_group];
+				psum += (ambient - x[PCB_C_S])/(pk->r_amb_sec_c_per_y) + local_result[threads_per_group+1];
 				dv[PCB_C_S] = psum / (pk->c_pcb_c_per_y + pk->c_amb_sec_c_per_y);
 			}
 		}
@@ -433,6 +490,15 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 		/* partition r_pcb1_x among all the nr grid cells. edge cell has half the rx	*/
 		if (block_id == (12 & num_blocks_mask))
 		{
+			if (local_id == 0)
+			{
+				local_result[threads_per_group] = (l[pcbidx].rx / 2.0 + nr * pk->r_pcb1_x);	
+			}
+			if (local_id == 1)
+			{
+				local_result[threads_per_group+1] = (x[SOLDER_W] - x[PCB_C_W])/pk->r_pcb_c_per_x +
+						(x[PCB_W] - x[PCB_C_W])/(pk->r_pcb2_x + pk->r_pcb);
+			}
 			if (do_endpoint)
 				sum_col_with_endpoint(nl, nr, nc, local_result, pcbidx, 0, x[PCB_C_W], h, k, y);
 			else
@@ -440,16 +506,23 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			if (local_id == 0)
 			{
 				psum = local_result[0];
-				psum /= (l[pcbidx].rx / 2.0 + nr * pk->r_pcb1_x);
-				psum += (ambient - x[PCB_C_W])/(pk->r_amb_sec_c_per_x) + 
-						(x[SOLDER_W] - x[PCB_C_W])/pk->r_pcb_c_per_x +
-						(x[PCB_W] - x[PCB_C_W])/(pk->r_pcb2_x + pk->r_pcb);
+				psum /= local_result[threads_per_group];
+				psum += (ambient - x[PCB_C_W])/(pk->r_amb_sec_c_per_x) + local_result[threads_per_group+1];
 				dv[PCB_C_W] = psum / (pk->c_pcb_c_per_x + pk->c_amb_sec_c_per_x);
 			}
 		}
   		
 		if (block_id == (13 & num_blocks_mask))
 		{
+			if (local_id == 0)
+			{
+				local_result[threads_per_group] = (l[pcbidx].rx / 2.0 + nr * pk->r_pcb1_x);	
+			}
+			if (local_id == 1)
+			{
+				local_result[threads_per_group+1] = (x[SOLDER_E] - x[PCB_C_E])/pk->r_pcb_c_per_x +
+						(x[PCB_E] - x[PCB_C_E])/(pk->r_pcb2_x + pk->r_pcb);
+			}
 			if (do_endpoint)
 				sum_col_with_endpoint(nl, nr, nc, local_result, pcbidx, nc-1, x[PCB_C_E], h, k, y);
 			else
@@ -457,10 +530,8 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			if (local_id == 0)
 			{
 				psum = local_result[0];
-				psum /= (l[pcbidx].rx / 2.0 + nr * pk->r_pcb1_x);
-				psum += (ambient - x[PCB_C_E])/(pk->r_amb_sec_c_per_x) + 
-						(x[SOLDER_E] - x[PCB_C_E])/pk->r_pcb_c_per_x +
-						(x[PCB_E] - x[PCB_C_E])/(pk->r_pcb2_x + pk->r_pcb);
+				psum /= local_result[threads_per_group];
+				psum += (ambient - x[PCB_C_E])/(pk->r_amb_sec_c_per_x) + local_result[threads_per_group+1];
 				dv[PCB_C_E] = psum / (pk->c_pcb_c_per_x + pk->c_amb_sec_c_per_x);
 			}
 		}
@@ -593,6 +664,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			}
 		}
 	}
+	
 }
 
 /* macros for calculating currents(power values)	*/
