@@ -8,6 +8,7 @@
 #endif
 
 #include <time.h>
+#include <stdio.h>
 #include "gpu_rk4.h"
 
 // #define FLUSH_DEBUG
@@ -81,6 +82,8 @@ typedef struct gpu_config_t_st
 	struct timespec time_start;
 	struct timespec time_end;
 #endif
+
+	FILE* cpu_dma;
 		
 }gpu_config_t;
 

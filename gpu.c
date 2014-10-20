@@ -340,14 +340,24 @@ void gpu_init(gpu_config_t *config, grid_model_t *model)
 	config->_cl_queue = clCreateCommandQueue(config->_cl_context, devices[config->device_id], 0, &err);
 	gpu_check_error(err, "Couldn't create an OpenCL command queue");
 
+	// Create memory objects
 	gpu_create_buffers(config, model);
+
+	// Setup kernel dimensions
+	if (model->rows % config->local_work_size[0] || model->cols % config->local_work_size[1])
+	{
+		fatal("Invalid number of rows or columns");
+	}
+	config->global_work_size[0] = model->rows;
+	config->global_work_size[1] = model->cols;
 
 	// Create OpenCL program
 	config->_cl_program = clCreateProgramWithSource(config->_cl_context, 1, (const char**)&config->_cl_kernel_string, &config->_cl_kernel_size, &err);
 	gpu_check_error(err, "Couldn't create the OpenCL program");
-	
-	sprintf(compiler_options, "-cl-denorms-are-zero -cl-strict-aliasing -cl-fast-relaxed-math -DENABLE_SECONDARY_MODEL=%d -DNUMBER_OF_LAYERS=%d -DLOCAL_SIZE_1=(size_t)%zu -DLOCAL_SIZE_0=(size_t)%zu -DNUMBER_OF_ROWS=(size_t)%d -DNUMBER_OF_COLS=(size_t)%d",
-			model->config.model_secondary, model->n_layers, config->local_work_size[1], config->local_work_size[0], model->rows, model->cols);
+	int vector_size = config->vector_size / config->element_size;
+	sprintf(compiler_options, "-cl-denorms-are-zero -cl-strict-aliasing -cl-fast-relaxed-math "\
+			"-DENABLE_SECONDARY_MODEL=%d -DNUMBER_OF_LAYERS=%d -DLOCAL_SIZE_1=(size_t)%d -DLOCAL_SIZE_0=(size_t)%d -DNUMBER_OF_ROWS=(size_t)%d -DNUMBER_OF_COLS=(size_t)%d ",
+			model->config.model_secondary, model->n_layers, (int)config->local_work_size[1], (int)config->local_work_size[0], model->rows, model->cols);
 	// Build OpenCL program
 	printf("compiling kernel with options: %s\n", compiler_options);
 	err = clBuildProgram(config->_cl_program, 0, NULL, compiler_options, NULL, NULL);
@@ -373,16 +383,6 @@ void gpu_init(gpu_config_t *config, grid_model_t *model)
 	config->_cl_kernel_max_reduce = clCreateKernel(config->_cl_program, "max_reduce", &err);
 	gpu_check_error(err, "Couldn't create OpenCL kernel max_reduce()");
 
-	// Create memory objects
-	// gpu_create_buffers(config, model);
-
-	// Setup kernel dimensions
-	if (model->rows % config->local_work_size[0] || model->cols % config->local_work_size[1])
-	{
-		fatal("Invalid number of rows or columns");
-	}
-	config->global_work_size[0] = model->rows;
-	config->global_work_size[1] = model->cols;
 
 	/* Create kernel arguments */
 	err  = clSetKernelArg(config->_cl_kernel_rk4, GRID_CONST_MODEL, sizeof(cl_mem), &config->d_c_model);
@@ -398,7 +398,7 @@ void gpu_init(gpu_config_t *config, grid_model_t *model)
 	err |= clSetKernelArg(config->_cl_kernel_rk4, GRID_IN_K, sizeof(cl_mem), &config->d_k1);
 	err |= clSetKernelArg(config->_cl_kernel_rk4, GRID_IN_Y, sizeof(cl_mem), &config->d_y);
 	gpu_check_error(err, "Couldn't setup a OpenCL kernel argument for slope_fn_grid_gpu()");
-	int vector_size = config->vector_size / config->element_size;
+
 	err  = clSetKernelArg(config->_cl_kernel_average, AVG_IN_Y, sizeof(cl_mem), &config->d_y);
 	err |= clSetKernelArg(config->_cl_kernel_average, AVG_IN_K1, sizeof(cl_mem), &config->d_k1);
 	err |= clSetKernelArg(config->_cl_kernel_average, AVG_IN_K2, sizeof(cl_mem), &config->d_k2);
@@ -426,7 +426,15 @@ void gpu_init(gpu_config_t *config, grid_model_t *model)
 	gpu_check_error(err, "Couldn't setup a OpenCL kernel argument for max_reduce()");
 	
 	printf("OpenCL initialized.\n");
-	
+	config->cpu_dma = fopen("/dev/cpu_dma_latency", "w");
+	if (config->cpu_dma != NULL) {
+		int32_t target = 0;
+		fwrite(&target, sizeof(target), 1, config->cpu_dma);
+		printf("CPU C-states disabled.\n");
+	}
+	else {
+		printf("Can't disable C-states. Do you have write permission to /dev/cpu_dma_latency?\n");
+	}
 	free(devices);
 #if ENABLE_TIMER > 0
 	clock_gettime(CLOCK_MONOTONIC, &config->time_start);
@@ -462,6 +470,9 @@ void gpu_destroy(gpu_config_t *config)
 	clReleaseContext(config->_cl_context);
 	current_gpu_config = NULL; // prevents pinned memory allocation
 	puts("OpenCL environment has been cleaned up.\n");
+	if (config->cpu_dma != NULL) {
+		fclose(config->cpu_dma);
+	}
 }
 
 /* 

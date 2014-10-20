@@ -56,7 +56,7 @@ __kernel void rk4_average(__global double *y, __global double *k1, __global doub
 }
 
 __kernel void rk4_average_with_maxdiff(__global double *y, __global double *k1, __global double *k2, __global double *k3, __global double *k4, double h, __global double *yout, unsigned int n, __global double *ytemp,  __local double *local_result) {
-	int stride = get_global_size(0); // NUMBER_OF_ROWS will increase VGPR usage
+	int stride = get_global_size(0);
 	int local_size = LOCAL_SIZE_0;
 	int local_id = get_local_id(0);
 	int id = get_global_id(0);
@@ -78,7 +78,7 @@ __kernel void rk4_average_with_maxdiff(__global double *y, __global double *k1, 
 }
 
 __kernel void max_reduce(__global double *y, unsigned int n, __local double *local_result) {
-	int stride = NUMBER_OF_ROWS;
+	int stride = get_global_size(0);
 	int local_size = LOCAL_SIZE_0;
 	int local_id = get_local_id(0);
 	int id = get_global_id(0);
