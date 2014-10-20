@@ -344,20 +344,21 @@ void gpu_init(gpu_config_t *config, grid_model_t *model)
 	gpu_create_buffers(config, model);
 
 	// Setup kernel dimensions
-	if (model->rows % config->local_work_size[0] || model->cols % config->local_work_size[1])
+	if (model->rows % config->local_work_size[1] || model->cols % config->local_work_size[0])
 	{
 		fatal("Invalid number of rows or columns");
 	}
-	config->global_work_size[0] = model->rows;
-	config->global_work_size[1] = model->cols;
+	config->global_work_size[1] = model->rows;
+	config->global_work_size[0] = model->cols;
+
 
 	// Create OpenCL program
 	config->_cl_program = clCreateProgramWithSource(config->_cl_context, 1, (const char**)&config->_cl_kernel_string, &config->_cl_kernel_size, &err);
 	gpu_check_error(err, "Couldn't create the OpenCL program");
 	int vector_size = config->vector_size / config->element_size;
 	sprintf(compiler_options, "-cl-denorms-are-zero -cl-strict-aliasing -cl-fast-relaxed-math "\
-			"-DENABLE_SECONDARY_MODEL=%d -DNUMBER_OF_LAYERS=%d -DLOCAL_SIZE_1=(size_t)%d -DLOCAL_SIZE_0=(size_t)%d -DNUMBER_OF_ROWS=(size_t)%d -DNUMBER_OF_COLS=(size_t)%d ",
-			model->config.model_secondary, model->n_layers, (int)config->local_work_size[1], (int)config->local_work_size[0], model->rows, model->cols);
+			"-DENABLE_SECONDARY_MODEL=%d -DNUMBER_OF_LAYERS=%d -DLOCAL_SIZE_1=(size_t)%d -DLOCAL_SIZE_0=(size_t)%d -DNUMBER_OF_ROWS=(size_t)%d -DNUMBER_OF_COLS=(size_t)%d -DLOCAL_SIZE_1D=(size_t)%d",
+			model->config.model_secondary, model->n_layers, (int)config->local_work_size[1], (int)config->local_work_size[0], model->rows, model->cols, (int)(config->local_work_size[0] * config->local_work_size[1]));
 	// Build OpenCL program
 	printf("compiling kernel with options: %s\n", compiler_options);
 	err = clBuildProgram(config->_cl_program, 0, NULL, compiler_options, NULL, NULL);
@@ -497,6 +498,7 @@ double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, dou
 	// output = dvector(n);
 
 	size_t buffer_size = config->vector_size;
+	// printf("buffer_size = %zu, n = %d\n", buffer_size, n);
 	/* copy p->cuboid to device */
 	clEnqueueWriteBuffer(config->_cl_queue, config->d_p_cuboid, CL_FALSE, 0, buffer_size, ((grid_model_vector_t*)p)->cuboid[0][0], 0, NULL, NULL);
 	/* copy y to device */

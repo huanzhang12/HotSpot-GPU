@@ -57,7 +57,7 @@ __kernel void rk4_average(__global double *y, __global double *k1, __global doub
 
 __kernel void rk4_average_with_maxdiff(__global double *y, __global double *k1, __global double *k2, __global double *k3, __global double *k4, double h, __global double *yout, unsigned int n, __global double *ytemp,  __local double *local_result) {
 	int stride = get_global_size(0);
-	int local_size = LOCAL_SIZE_0;
+	int local_size = LOCAL_SIZE_1D;
 	int local_id = get_local_id(0);
 	int id = get_global_id(0);
 	double private_max = 0.0;
@@ -79,7 +79,7 @@ __kernel void rk4_average_with_maxdiff(__global double *y, __global double *k1, 
 
 __kernel void max_reduce(__global double *y, unsigned int n, __local double *local_result) {
 	int stride = get_global_size(0);
-	int local_size = LOCAL_SIZE_0;
+	int local_size = LOCAL_SIZE_1D;
 	int local_id = get_local_id(0);
 	int id = get_global_id(0);
 	double private_max = 0.0;
@@ -237,7 +237,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 	
 	/* sink inner north/south	*/
 	/* partition r_hs1_y among all the nc grid cells. edge cell has half the ry	*/
-	else if (block_id == (1 & num_blocks_mask))
+	if (block_id == (1 & num_blocks_mask))
 	{
 		if (do_endpoint)		
 			sum_row_with_endpoint(nl, nr, nc, local_result, hsidx, 0, x[SINK_C_N], h, k, y);
@@ -254,7 +254,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 		}
 	}
 	
-	else if (block_id == (2 & num_blocks_mask))
+	if (block_id == (2 & num_blocks_mask))
 	{
 		if (do_endpoint)	
 			sum_row_with_endpoint(nl, nr, nc, local_result, hsidx, nr-1, x[SINK_C_S], h, k, y);
@@ -273,7 +273,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 
 	/* sink inner west/east	*/
 	/* partition r_hs1_x among all the nr grid cells. edge cell has half the rx	*/
-	else if (block_id == (3 & num_blocks_mask))
+	if (block_id == (3 & num_blocks_mask))
 	{
 		if (do_endpoint)
 			sum_col_with_endpoint(nl, nr, nc, local_result, hsidx, 0, x[SINK_C_W], h, k, y);
@@ -290,7 +290,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 		}
 	}
 
-	else if (block_id == (4 & num_blocks_mask))
+	if (block_id == (4 & num_blocks_mask))
 	{
 		if (do_endpoint)
 			sum_col_with_endpoint(nl, nr, nc, local_result, hsidx, nc-1, x[SINK_C_E], h, k, y);
@@ -309,7 +309,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 
 	/* spreader north/south	*/
 	/* partition r_sp1_y among all the nc grid cells. edge cell has half the ry	*/
-	else if (block_id == (5 & num_blocks_mask))
+	if (block_id == (5 & num_blocks_mask))
 	{
 		if (do_endpoint)
 			sum_row_with_endpoint(nl, nr, nc, local_result, spidx, 0, x[SP_N], h, k, y);
@@ -324,7 +324,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 		}
 	}
 
-	else if (block_id == (6 & num_blocks_mask))
+	if (block_id == (6 & num_blocks_mask))
 	{
 		if (do_endpoint)
 			sum_row_with_endpoint(nl, nr, nc, local_result, spidx, nr-1, x[SP_S], h, k, y);
@@ -341,7 +341,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 
 	/* spreader west/east	*/
 	/* partition r_sp1_x among all the nr grid cells. edge cell has half the rx	*/
-	else if (block_id == (7 & num_blocks_mask))
+	if (block_id == (7 & num_blocks_mask))
 	{
 		if (do_endpoint)
 			sum_col_with_endpoint(nl, nr, nc, local_result, spidx, 0, x[SP_W], h, k, y);
@@ -356,7 +356,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 		}
 	}
 
-	else if (block_id == (8 & num_blocks_mask))
+	if (block_id == (8 & num_blocks_mask))
 	{
 		if (do_endpoint)
 			sum_col_with_endpoint(nl, nr, nc, local_result, spidx, nc-1, x[SP_E], h, k, y);
@@ -395,7 +395,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
   	
 		/* PCB inner north/south	*/
 		/* partition r_pcb1_y among all the nc grid cells. edge cell has half the ry	*/
-		else if (block_id == (10 & num_blocks_mask))
+		if (block_id == (10 & num_blocks_mask))
 		{
 			if (do_endpoint)
 				sum_row_with_endpoint(nl, nr, nc, local_result, pcbidx, 0, x[PCB_C_N], h, k, y);
@@ -412,7 +412,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			}
 		}
   		
-		else if (block_id == (11 & num_blocks_mask))
+		if (block_id == (11 & num_blocks_mask))
 		{
 			if (do_endpoint)
 				sum_row_with_endpoint(nl, nr, nc, local_result, pcbidx, nr-1, x[PCB_C_S], h, k, y);
@@ -431,7 +431,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
   	
   		/* PCB inner west/east	*/
 		/* partition r_pcb1_x among all the nr grid cells. edge cell has half the rx	*/
-		else if (block_id == (12 & num_blocks_mask))
+		if (block_id == (12 & num_blocks_mask))
 		{
 			if (do_endpoint)
 				sum_col_with_endpoint(nl, nr, nc, local_result, pcbidx, 0, x[PCB_C_W], h, k, y);
@@ -448,7 +448,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			}
 		}
   		
-		else if (block_id == (13 & num_blocks_mask))
+		if (block_id == (13 & num_blocks_mask))
 		{
 			if (do_endpoint)
 				sum_col_with_endpoint(nl, nr, nc, local_result, pcbidx, nc-1, x[PCB_C_E], h, k, y);
@@ -467,7 +467,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
   	
 		/* solder ball north/south	*/
 		/* partition r_solder1_y among all the nc grid cells. edge cell has half the ry	*/
-		else if (block_id == (14 & num_blocks_mask))
+		if (block_id == (14 & num_blocks_mask))
 		{
 			if (do_endpoint)
 				sum_row_with_endpoint(nl, nr, nc, local_result, solderidx, 0, x[SOLDER_N], h, k, y);
@@ -482,7 +482,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			}
 		}
   		
-		else if (block_id == (15 & num_blocks_mask))
+		if (block_id == (15 & num_blocks_mask))
 		{
 			if (do_endpoint)
 				sum_row_with_endpoint(nl, nr, nc, local_result, solderidx, nr-1, x[SOLDER_S], h, k, y);
@@ -499,7 +499,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
   	
 		/* solder ball west/east	*/
 		/* partition r_solder1_x among all the nr grid cells. edge cell has half the rx	*/
-		else if (block_id == (16 & num_blocks_mask))
+		if (block_id == (16 & num_blocks_mask))
 		{
 			if (do_endpoint)
 				sum_col_with_endpoint(nl, nr, nc, local_result, solderidx, 0, x[SOLDER_W], h, k, y);
@@ -514,7 +514,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			}
 		}
   		
-		else if (block_id == (17 & num_blocks_mask))
+		if (block_id == (17 & num_blocks_mask))
 		{
 			if (do_endpoint)
 				sum_col_with_endpoint(nl, nr, nc, local_result, solderidx, nc-1, x[SOLDER_E], h, k, y);
@@ -531,7 +531,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 		
 		/* package substrate north/south	*/
 		/* partition r_sub1_y among all the nc grid cells. edge cell has half the ry	*/
-		else if (block_id == (18 & num_blocks_mask))
+		if (block_id == (18 & num_blocks_mask))
 		{
 			if (do_endpoint)
 				sum_row_with_endpoint(nl, nr, nc, local_result, subidx, 0, x[SUB_N], h, k, y);
@@ -546,7 +546,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			}
 		}
   		
-		else if (block_id == (19 & num_blocks_mask))
+		if (block_id == (19 & num_blocks_mask))
 		{
 			if (do_endpoint)
 				sum_row_with_endpoint(nl, nr, nc, local_result, subidx, nr-1, x[SOLDER_S], h, k, y);
@@ -563,7 +563,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
   	
 		/* sub ball west/east	*/
 		/* partition r_sub1_x among all the nr grid cells. edge cell has half the rx	*/
-		else if (block_id == (20 & num_blocks_mask))
+		if (block_id == (20 & num_blocks_mask))
 		{
 			if (do_endpoint)
 				sum_col_with_endpoint(nl, nr, nc, local_result, subidx, 0, x[SUB_W], h, k, y);
@@ -578,7 +578,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			}
 		}
   		
-		else if (block_id == (21 & num_blocks_mask))
+		if (block_id == (21 & num_blocks_mask))
 		{
 			if (do_endpoint)
 				sum_col_with_endpoint(nl, nr, nc, local_result, subidx, nc-1, x[SUB_E], h, k, y);
