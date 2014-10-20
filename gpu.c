@@ -286,7 +286,7 @@ void gpu_init(gpu_config_t *config, grid_model_t *model)
 	cl_uint value_size;
 	size_t info_size;
 	char* device_name;
-	char compiler_options[256];
+	char compiler_options[512] = {0};
 	int err;
 	current_gpu_config = config;
 	if (!config->gpu_enabled) {
@@ -346,7 +346,7 @@ void gpu_init(gpu_config_t *config, grid_model_t *model)
 	config->_cl_program = clCreateProgramWithSource(config->_cl_context, 1, (const char**)&config->_cl_kernel_string, &config->_cl_kernel_size, &err);
 	gpu_check_error(err, "Couldn't create the OpenCL program");
 	
-	sprintf(compiler_options, "-DENABLE_SECONDARY_MODEL=%d -DNUMBER_OF_LAYERS=%d -DLOCAL_SIZE_1=(size_t)%zu -DLOCAL_SIZE_0=(size_t)%zu -DNUMBER_OF_ROWS=(size_t)%d -DNUMBER_OF_COLS=(size_t)%d",
+	sprintf(compiler_options, "-cl-denorms-are-zero -cl-strict-aliasing -cl-fast-relaxed-math -DENABLE_SECONDARY_MODEL=%d -DNUMBER_OF_LAYERS=%d -DLOCAL_SIZE_1=(size_t)%zu -DLOCAL_SIZE_0=(size_t)%zu -DNUMBER_OF_ROWS=(size_t)%d -DNUMBER_OF_COLS=(size_t)%d",
 			model->config.model_secondary, model->n_layers, config->local_work_size[1], config->local_work_size[0], model->rows, model->cols);
 	// Build OpenCL program
 	printf("compiling kernel with options: %s\n", compiler_options);
