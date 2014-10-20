@@ -10,6 +10,11 @@
 #endif
 */
 
+/* macro NUMBER_OF_ROWS, NUMBER_OF_COLS, LOCAL_SIZE_1, LOCAL_SIZE_0 will be defined at compilation time */
+
+#define NUM_GROUPS_1 ((NUMBER_OF_ROWS)/(LOCAL_SIZE_1))
+#define NUM_GROUPS_0 ((NUMBER_OF_COLS)/(LOCAL_SIZE_0))
+
 __kernel void rk4(__global float4* data, 
       __local float* local_result, __global float* group_result) {
 
@@ -189,8 +194,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 	unsigned int block_id = mad24(get_group_id(1), get_num_groups(0), get_group_id(0));
 	unsigned int thread_id = mad24(get_global_id(1), NUMBER_OF_ROWS, get_global_id(0));
 	unsigned int local_id = mad24(get_local_id(1), LOCAL_SIZE_0, get_local_id(0));
-	unsigned int num_blocks_mask = (0x1u << (31 - clz(mul24(get_num_groups(0), get_num_groups(1))))) - 0x1u;
-	unsigned int group_job_id = 1;
+	unsigned int num_blocks_mask = (0x1u << (31 - clz(mul24(NUM_GROUPS_1, NUM_GROUPS_0)))) - 0x1u;
 
 	/* Do we need to calculate endpoint instead of reading it directly? */
 	bool do_endpoint = (h != 0.0);
@@ -233,7 +237,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 	
 	/* sink inner north/south	*/
 	/* partition r_hs1_y among all the nc grid cells. edge cell has half the ry	*/
-	if (block_id == group_job_id)
+	else if (block_id == (1 & num_blocks_mask))
 	{
 		if (do_endpoint)		
 			sum_row_with_endpoint(nl, nr, nc, local_result, hsidx, 0, x[SINK_C_N], h, k, y);
@@ -249,9 +253,8 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			dv[SINK_C_N] = psum / (pk->c_hs_c_per_y + pk->c_amb_c_per_y);
 		}
 	}
-	group_job_id = (group_job_id + 1) & num_blocks_mask;
 	
-	if (block_id == group_job_id)
+	else if (block_id == (2 & num_blocks_mask))
 	{
 		if (do_endpoint)	
 			sum_row_with_endpoint(nl, nr, nc, local_result, hsidx, nr-1, x[SINK_C_S], h, k, y);
@@ -267,11 +270,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			dv[SINK_C_S] = psum / (pk->c_hs_c_per_y + pk->c_amb_c_per_y);
 		}
 	}
-	group_job_id = (group_job_id + 1) & num_blocks_mask;
 
 	/* sink inner west/east	*/
 	/* partition r_hs1_x among all the nr grid cells. edge cell has half the rx	*/
-	if (block_id == group_job_id)
+	else if (block_id == (3 & num_blocks_mask))
 	{
 		if (do_endpoint)
 			sum_col_with_endpoint(nl, nr, nc, local_result, hsidx, 0, x[SINK_C_W], h, k, y);
@@ -287,9 +289,8 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			dv[SINK_C_W] = psum / (pk->c_hs_c_per_x + pk->c_amb_c_per_x);
 		}
 	}
-	group_job_id = (group_job_id + 1) & num_blocks_mask;
 
-	if (block_id == group_job_id)
+	else if (block_id == (4 & num_blocks_mask))
 	{
 		if (do_endpoint)
 			sum_col_with_endpoint(nl, nr, nc, local_result, hsidx, nc-1, x[SINK_C_E], h, k, y);
@@ -305,11 +306,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			dv[SINK_C_E] = psum / (pk->c_hs_c_per_x + pk->c_amb_c_per_x);
 		}
 	}
-	group_job_id = (group_job_id + 1) & num_blocks_mask;
 
 	/* spreader north/south	*/
 	/* partition r_sp1_y among all the nc grid cells. edge cell has half the ry	*/
-	if (block_id == group_job_id)
+	else if (block_id == (5 & num_blocks_mask))
 	{
 		if (do_endpoint)
 			sum_row_with_endpoint(nl, nr, nc, local_result, spidx, 0, x[SP_N], h, k, y);
@@ -323,9 +323,8 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			dv[SP_N] = psum / pk->c_sp_per_y;
 		}
 	}
-	group_job_id = (group_job_id + 1) & num_blocks_mask;
 
-	if (block_id == group_job_id)
+	else if (block_id == (6 & num_blocks_mask))
 	{
 		if (do_endpoint)
 			sum_row_with_endpoint(nl, nr, nc, local_result, spidx, nr-1, x[SP_S], h, k, y);
@@ -339,11 +338,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			dv[SP_S] = psum / pk->c_sp_per_y;
 		}
 	}
-	group_job_id = (group_job_id + 1) & num_blocks_mask;
 
 	/* spreader west/east	*/
 	/* partition r_sp1_x among all the nr grid cells. edge cell has half the rx	*/
-	if (block_id == group_job_id)
+	else if (block_id == (7 & num_blocks_mask))
 	{
 		if (do_endpoint)
 			sum_col_with_endpoint(nl, nr, nc, local_result, spidx, 0, x[SP_W], h, k, y);
@@ -357,9 +355,8 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			dv[SP_W] = psum / pk->c_sp_per_x;
 		}
 	}
-	group_job_id = (group_job_id + 1) & num_blocks_mask;
 
-	if (block_id == group_job_id)
+	else if (block_id == (8 & num_blocks_mask))
 	{
 		if (do_endpoint)
 			sum_col_with_endpoint(nl, nr, nc, local_result, spidx, nc-1, x[SP_E], h, k, y);
@@ -375,10 +372,9 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 	}
 	
 	if (model_secondary) {
-		group_job_id = (group_job_id + 1) & num_blocks_mask;
 		
 		/* PCB outer north/south	*/
-		bool is_local_id_zero = (block_id == group_job_id) && (local_id == 0);
+		bool is_local_id_zero = (block_id == (9 & num_blocks_mask)) && (local_id == 0);
 		if (is_local_id_zero)
 		{
 			psum = (ambient - x[PCB_N])/(pk->r_amb_sec_per) + 
@@ -396,11 +392,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 				   (x[PCB_C_E] - x[PCB_E])/(pk->r_pcb2_x + pk->r_pcb);
 			dv[PCB_E] = psum / (pk->c_pcb_per + pk->c_amb_sec_per);
 		}
-		group_job_id = (group_job_id + 1) & num_blocks_mask;
   	
 		/* PCB inner north/south	*/
 		/* partition r_pcb1_y among all the nc grid cells. edge cell has half the ry	*/
-		if (block_id == group_job_id)
+		else if (block_id == (10 & num_blocks_mask))
 		{
 			if (do_endpoint)
 				sum_row_with_endpoint(nl, nr, nc, local_result, pcbidx, 0, x[PCB_C_N], h, k, y);
@@ -416,9 +411,8 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 				dv[PCB_C_N] = psum / (pk->c_pcb_c_per_y + pk->c_amb_sec_c_per_y);
 			}
 		}
-		group_job_id = (group_job_id + 1) & num_blocks_mask;
   		
-		if (block_id == group_job_id)
+		else if (block_id == (11 & num_blocks_mask))
 		{
 			if (do_endpoint)
 				sum_row_with_endpoint(nl, nr, nc, local_result, pcbidx, nr-1, x[PCB_C_S], h, k, y);
@@ -434,11 +428,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 				dv[PCB_C_S] = psum / (pk->c_pcb_c_per_y + pk->c_amb_sec_c_per_y);
 			}
 		}
-		group_job_id = (group_job_id + 1) & num_blocks_mask;
   	
   		/* PCB inner west/east	*/
 		/* partition r_pcb1_x among all the nr grid cells. edge cell has half the rx	*/
-		if (block_id == group_job_id)
+		else if (block_id == (12 & num_blocks_mask))
 		{
 			if (do_endpoint)
 				sum_col_with_endpoint(nl, nr, nc, local_result, pcbidx, 0, x[PCB_C_W], h, k, y);
@@ -454,9 +447,8 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 				dv[PCB_C_W] = psum / (pk->c_pcb_c_per_x + pk->c_amb_sec_c_per_x);
 			}
 		}
-		group_job_id = (group_job_id + 1) & num_blocks_mask;
   		
-		if (block_id == group_job_id)
+		else if (block_id == (13 & num_blocks_mask))
 		{
 			if (do_endpoint)
 				sum_col_with_endpoint(nl, nr, nc, local_result, pcbidx, nc-1, x[PCB_C_E], h, k, y);
@@ -472,11 +464,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 				dv[PCB_C_E] = psum / (pk->c_pcb_c_per_x + pk->c_amb_sec_c_per_x);
 			}
 		}
-		group_job_id = (group_job_id + 1) & num_blocks_mask;
   	
 		/* solder ball north/south	*/
 		/* partition r_solder1_y among all the nc grid cells. edge cell has half the ry	*/
-		if (block_id == group_job_id)
+		else if (block_id == (14 & num_blocks_mask))
 		{
 			if (do_endpoint)
 				sum_row_with_endpoint(nl, nr, nc, local_result, solderidx, 0, x[SOLDER_N], h, k, y);
@@ -490,9 +481,8 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 				dv[SOLDER_N] = psum / pk->c_solder_per_y;
 			}
 		}
-		group_job_id = (group_job_id + 1) & num_blocks_mask;
   		
-		if (block_id == group_job_id)
+		else if (block_id == (15 & num_blocks_mask))
 		{
 			if (do_endpoint)
 				sum_row_with_endpoint(nl, nr, nc, local_result, solderidx, nr-1, x[SOLDER_S], h, k, y);
@@ -506,11 +496,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 				dv[SOLDER_S] = psum / pk->c_solder_per_y;
 			}
 		}
-		group_job_id = (group_job_id + 1) & num_blocks_mask;
   	
 		/* solder ball west/east	*/
 		/* partition r_solder1_x among all the nr grid cells. edge cell has half the rx	*/
-		if (block_id == group_job_id)
+		else if (block_id == (16 & num_blocks_mask))
 		{
 			if (do_endpoint)
 				sum_col_with_endpoint(nl, nr, nc, local_result, solderidx, 0, x[SOLDER_W], h, k, y);
@@ -524,9 +513,8 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 				dv[SOLDER_W] = psum / pk->c_solder_per_x;
 			}
 		}
-		group_job_id = (group_job_id + 1) & num_blocks_mask;
   		
-		if (block_id == group_job_id)
+		else if (block_id == (17 & num_blocks_mask))
 		{
 			if (do_endpoint)
 				sum_col_with_endpoint(nl, nr, nc, local_result, solderidx, nc-1, x[SOLDER_E], h, k, y);
@@ -540,11 +528,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 				dv[SOLDER_E] = psum / pk->c_solder_per_x;
 			}
 		}
-		group_job_id = (group_job_id + 1) & num_blocks_mask;
 		
 		/* package substrate north/south	*/
 		/* partition r_sub1_y among all the nc grid cells. edge cell has half the ry	*/
-		if (block_id == group_job_id)
+		else if (block_id == (18 & num_blocks_mask))
 		{
 			if (do_endpoint)
 				sum_row_with_endpoint(nl, nr, nc, local_result, subidx, 0, x[SUB_N], h, k, y);
@@ -558,9 +545,8 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 				dv[SUB_N] = psum / pk->c_sub_per_y;
 			}
 		}
-		group_job_id = (group_job_id + 1) & num_blocks_mask;
   		
-		if (block_id == group_job_id)
+		else if (block_id == (19 & num_blocks_mask))
 		{
 			if (do_endpoint)
 				sum_row_with_endpoint(nl, nr, nc, local_result, subidx, nr-1, x[SOLDER_S], h, k, y);
@@ -574,11 +560,10 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 				dv[SUB_S] = psum / pk->c_sub_per_y;
 			}
 		}
-		group_job_id = (group_job_id + 1) & num_blocks_mask;
   	
 		/* sub ball west/east	*/
 		/* partition r_sub1_x among all the nr grid cells. edge cell has half the rx	*/
-		if (block_id == group_job_id)
+		else if (block_id == (20 & num_blocks_mask))
 		{
 			if (do_endpoint)
 				sum_col_with_endpoint(nl, nr, nc, local_result, subidx, 0, x[SUB_W], h, k, y);
@@ -592,9 +577,8 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 				dv[SUB_W] = psum / pk->c_sub_per_x;
 			}
 		}
-		group_job_id = (group_job_id + 1) & num_blocks_mask;
   		
-		if (block_id == group_job_id)
+		else if (block_id == (21 & num_blocks_mask))
 		{
 			if (do_endpoint)
 				sum_col_with_endpoint(nl, nr, nc, local_result, subidx, nc-1, x[SUB_E], h, k, y);
@@ -807,8 +791,8 @@ __kernel void slope_fn_grid_gpu_test(__constant gpu_grid_model_t *model __attrib
  * equation is CdV + sum{(T - Ti)/Ri} = P 
  * so, slope = dV = [P + sum{(Ti-T)/Ri}]/C
  */
-// __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__((max_constant_size(sizeof(gpu_grid_model_t)))), __constant gpu_layer_t *l __attribute__((max_constant_size(MAX_LAYER_SUPPORT*sizeof(gpu_layer_t)))), __global double *v, __global double *dv, unsigned int nl_arg, unsigned int nr_arg, unsigned int nc_arg, __local double *local_result, __global double *p_cuboid, double h, __global double *k, __global double *y)
-__kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model, __constant gpu_layer_t *l, __global double *v, __global double *dv, unsigned int nl_arg, unsigned int nr_arg, unsigned int nc_arg, __local double *local_result, __global double *p_cuboid, double h, __global double *k, __global double *y)
+__kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__((max_constant_size(sizeof(gpu_grid_model_t)))), __constant gpu_layer_t *l __attribute__((max_constant_size(MAX_LAYER_SUPPORT*sizeof(gpu_layer_t)))), __global double *v, __global double *dv, unsigned int nl_arg, unsigned int nr_arg, unsigned int nc_arg, __local double *local_result, __global double *p_cuboid, double h, __global double *k, __global double *y)
+// __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model, __constant gpu_layer_t *l, __global double *v, __global double *dv, unsigned int nl_arg, unsigned int nr_arg, unsigned int nc_arg, __local double *local_result, __global double *p_cuboid, double h, __global double *k, __global double *y)
 {
 	int n;
 
@@ -904,88 +888,87 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model, __constant g
 		}
 		/* pre-calculate address offsets, avoid unnecessary address re-calculation */
 		uint center_off = A3D_offset(n_s,i_s,j_s,nl,nr_s,nc_s);
-		double center_value = v_cached[0][center_off];
 		psum = 0.0;
 		/* spreader core is connected to its periphery	*/
 		if (n == spidx) {
 			/* northern boundary - edge cell has half the ry	*/
 			if (i == 0)
-				psum += (x[SP_N] - center_value)/(l[n].ry/2.0 + nc*model->pack.r_sp1_y); 
+				psum += (x[SP_N] - v_cached[0][center_off])/(l[n].ry/2.0 + nc*model->pack.r_sp1_y); 
 			/* southern boundary - edge cell has half the ry	*/
 			if (i == nr-1)
-				psum += (x[SP_S] - center_value)/(l[n].ry/2.0 + nc*model->pack.r_sp1_y); 
+				psum += (x[SP_S] - v_cached[0][center_off])/(l[n].ry/2.0 + nc*model->pack.r_sp1_y); 
 			/* eastern boundary	 - edge cell has half the rx	*/
 			if (j == nc-1)
-				psum += (x[SP_E] - center_value)/(l[n].rx/2.0 + nr*model->pack.r_sp1_x); 
+				psum += (x[SP_E] - v_cached[0][center_off])/(l[n].rx/2.0 + nr*model->pack.r_sp1_x); 
 			/* western boundary	 - edge cell has half the rx	*/
 			if (j == 0)
-				psum += (x[SP_W] - center_value)/(l[n].rx/2.0 + nr*model->pack.r_sp1_x); 
+				psum += (x[SP_W] - v_cached[0][center_off])/(l[n].rx/2.0 + nr*model->pack.r_sp1_x); 
 		/* heatsink core is connected to its inner periphery and ambient	*/
 		} else if (n == hsidx) {
 			/* all nodes are connected to the ambient	*/
-			psum += (model->config.ambient - center_value)/l[n].rz;
+			psum += (model->config.ambient - v_cached[0][center_off])/l[n].rz;
 			/* northern boundary - edge cell has half the ry	*/
 			if (i == 0)
-				psum += (x[SINK_C_N] - center_value)/(l[n].ry/2.0 + nc*model->pack.r_hs1_y); 
+				psum += (x[SINK_C_N] - v_cached[0][center_off])/(l[n].ry/2.0 + nc*model->pack.r_hs1_y); 
 			/* southern boundary - edge cell has half the ry	*/
 			if (i == nr-1)
-				psum += (x[SINK_C_S] - center_value)/(l[n].ry/2.0 + nc*model->pack.r_hs1_y); 
+				psum += (x[SINK_C_S] - v_cached[0][center_off])/(l[n].ry/2.0 + nc*model->pack.r_hs1_y); 
 			/* eastern boundary	 - edge cell has half the rx	*/
 			if (j == nc-1)
-				psum += (x[SINK_C_E] - center_value)/(l[n].rx/2.0 + nr*model->pack.r_hs1_x); 
+				psum += (x[SINK_C_E] - v_cached[0][center_off])/(l[n].rx/2.0 + nr*model->pack.r_hs1_x); 
 			/* western boundary	 - edge cell has half the rx	*/
 			if (j == 0)
-				psum += (x[SINK_C_W] - center_value)/(l[n].rx/2.0 + nr*model->pack.r_hs1_x); 
+				psum += (x[SINK_C_W] - v_cached[0][center_off])/(l[n].rx/2.0 + nr*model->pack.r_hs1_x); 
 		}	else if (n == pcbidx && model_secondary) {
 			/* all nodes are connected to the ambient	*/
-			psum += (model->config.ambient - center_value)/(model->config.r_convec_sec * 
+			psum += (model->config.ambient - v_cached[0][center_off])/(model->config.r_convec_sec * 
 						   (model->config.s_pcb * model->config.s_pcb) / ((model->width / nc) * (model->height / nr)));
 			/* northern boundary - edge cell has half the ry	*/
 			if (i == 0)
-				psum += (x[PCB_C_N] - center_value)/(l[n].ry/2.0 + nc*model->pack.r_pcb1_y); 
+				psum += (x[PCB_C_N] - v_cached[0][center_off])/(l[n].ry/2.0 + nc*model->pack.r_pcb1_y); 
 			/* southern boundary - edge cell has half the ry	*/
 			if (i == nr-1)
-				psum += (x[PCB_C_S] - center_value)/(l[n].ry/2.0 + nc*model->pack.r_pcb1_y); 
+				psum += (x[PCB_C_S] - v_cached[0][center_off])/(l[n].ry/2.0 + nc*model->pack.r_pcb1_y); 
 			/* eastern boundary	 - edge cell has half the rx	*/
 			if (j == nc-1)
-				psum += (x[PCB_C_E] - center_value)/(l[n].rx/2.0 + nr*model->pack.r_pcb1_x); 
+				psum += (x[PCB_C_E] - v_cached[0][center_off])/(l[n].rx/2.0 + nr*model->pack.r_pcb1_x); 
 			/* western boundary	 - edge cell has half the rx	*/
 			if (j == 0)
-				psum += (x[PCB_C_W] - center_value)/(l[n].rx/2.0 + nr*model->pack.r_pcb1_x); 
+				psum += (x[PCB_C_W] - v_cached[0][center_off])/(l[n].rx/2.0 + nr*model->pack.r_pcb1_x); 
 		}	else if (n == subidx && model_secondary) {
 			/* northern boundary - edge cell has half the ry	*/
 			if (i == 0)
-				psum += (x[SUB_N] - center_value)/(l[n].ry/2.0 + nc*model->pack.r_sub1_y); 
+				psum += (x[SUB_N] - v_cached[0][center_off])/(l[n].ry/2.0 + nc*model->pack.r_sub1_y); 
 			/* southern boundary - edge cell has half the ry	*/
 			if (i == nr-1)
-				psum += (x[SUB_S] - center_value)/(l[n].ry/2.0 + nc*model->pack.r_sub1_y); 
+				psum += (x[SUB_S] - v_cached[0][center_off])/(l[n].ry/2.0 + nc*model->pack.r_sub1_y); 
 			/* eastern boundary	 - edge cell has half the rx	*/
 			if (j == nc-1)
-				psum += (x[SUB_E] - center_value)/(l[n].rx/2.0 + nr*model->pack.r_sub1_x); 
+				psum += (x[SUB_E] - v_cached[0][center_off])/(l[n].rx/2.0 + nr*model->pack.r_sub1_x); 
 			/* western boundary	 - edge cell has half the rx	*/
 			if (j == 0)
-				psum += (x[SUB_W] - center_value)/(l[n].rx/2.0 + nr*model->pack.r_sub1_x); 
+				psum += (x[SUB_W] - v_cached[0][center_off])/(l[n].rx/2.0 + nr*model->pack.r_sub1_x); 
 		}	else if (n == solderidx && model_secondary) {
 			/* northern boundary - edge cell has half the ry	*/
 			if (i == 0)
-				psum += (x[SOLDER_N] - center_value)/(l[n].ry/2.0 + nc*model->pack.r_solder1_y); 
+				psum += (x[SOLDER_N] - v_cached[0][center_off])/(l[n].ry/2.0 + nc*model->pack.r_solder1_y); 
 			/* southern boundary - edge cell has half the ry	*/
 			if (i == nr-1)
-				psum += (x[SOLDER_S] - center_value)/(l[n].ry/2.0 + nc*model->pack.r_solder1_y); 
+				psum += (x[SOLDER_S] - v_cached[0][center_off])/(l[n].ry/2.0 + nc*model->pack.r_solder1_y); 
 			/* eastern boundary	 - edge cell has half the rx	*/
 			if (j == nc-1)
-				psum += (x[SOLDER_E] - center_value)/(l[n].rx/2.0 + nr*model->pack.r_solder1_x); 
+				psum += (x[SOLDER_E] - v_cached[0][center_off])/(l[n].rx/2.0 + nr*model->pack.r_solder1_x); 
 			/* western boundary	 - edge cell has half the rx	*/
 			if (j == 0)
-				psum += (x[SOLDER_W] - center_value)/(l[n].rx/2.0 + nr*model->pack.r_solder1_x); 
+				psum += (x[SOLDER_W] - v_cached[0][center_off])/(l[n].rx/2.0 + nr*model->pack.r_solder1_x); 
 		}
-		
+		double center_value = v_cached[0][center_off];
 		uint north_off = center_off - nc_s; // A3D_offset(n_s,i_s-1,j_s,nl,nr_s,nc_s);
 		uint south_off = center_off + nc_s; // A3D_offset(n_s,i_s+1,j_s,nl,nr_s,nc_s);
 		uint west_off = center_off - 1; // A3D_offset(n_s,i_s,j_s-1,nl,nr_s,nc_s);
 		uint east_off = center_off + 1; // A3D_offset(n_s,i_s,j_s+1,nl,nr_s,nc_s);
-		uint above_off = (n > 0   ) ? A3D_offset((n_s-1)&0x3,i_s,j_s,nl,nr_s,nc_s) : center_off;
-		uint below_off = (n < nl-1) ? A3D_offset((n_s+1)&0x3,i_s,j_s,nl,nr_s,nc_s) : center_off;
+		uint above_off = select(center_off, (uint)A3D_offset((n-1)&0x3,i_s,j_s,nl,nr_s,nc_s), n > 0);
+		uint below_off = select(center_off, (uint)A3D_offset((n+1)&0x3,i_s,j_s,nl,nr_s,nc_s), n < nl-1);
 		if (model_secondary) {
 			/*** 
 			Some of these layers require other layers that are not in cache (i.e., not the 4 adjacent layers).
