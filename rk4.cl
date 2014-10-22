@@ -1049,51 +1049,35 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__
 			However, layer spidx (layer 4) must be load earily since TIM layer (layer 1) will need it before layer 4 has been cached.
 			Because only the data and the current location (i_s, j_s) are used by these layers saved to global memory, there are no global synchronization issues.
 			***/
+			psum += NP_as(l,v_cached[0],n) + SP_as(l,v_cached[0],n) + 
+				   EP_as(l,v_cached[0],n) + WP_as(l,v_cached[0],n);
 			if (n==LAYER_SI) { //top silicon layer (layer 0, requires layer 2, 1)
-				psum += NP_as(l,v_cached[0],n) + SP_as(l,v_cached[0],n) + 
-				   EP_as(l,v_cached[0],n) + WP_as(l,v_cached[0],n) + 
-				   ((A3D(v_cached[0],((n_s+2) & 3),i_s,j_s,nl_s,nr_s,nc_s)-center_value)/l[metalidx].rz) + // metalidx
+				psum += ((A3D(v_cached[0],((n_s+2) & 3),i_s,j_s,nl_s,nr_s,nc_s)-center_value)/l[metalidx].rz) + // metalidx
 				   ((v_cached[0][below_off]-center_value)/l[n].rz); // n+1
 			} else if (n==spidx) { //spreader layer (4, requires layer 1, 5)
-				psum += NP_as(l,v_cached[0],n) + SP_as(l,v_cached[0],n) + 
-				   EP_as(l,v_cached[0],n) + WP_as(l,v_cached[0],n) + 
-				   ((A3D(v,metalidx-1,i,j,nl,nr,nc)-center_value)/l[metalidx-1].rz) + // must load from global memory (OK)
+				psum += ((A3D(v,metalidx-1,i,j,nl,nr,nc)-center_value)/l[metalidx-1].rz) + // must load from global memory (OK)
 				   ((v_cached[0][below_off]-center_value)/l[n].rz); // hsidx
 			} else if (n==metalidx) { //metal layer (2, requires layer 3, 0)
-				psum += NP_as(l,v_cached[0],n) + SP_as(l,v_cached[0],n) + 
-				   EP_as(l,v_cached[0],n) + WP_as(l,v_cached[0],n) + 
-				   ((v_cached[0][below_off]-center_value)/l[c4idx].rz) + // c4idx
+				psum += ((v_cached[0][below_off]-center_value)/l[c4idx].rz) + // c4idx
 				   ((A3D(v_cached[0],((n_s-2) & 3),i_s,j_s,nl_s,nr_s,nc_s)-center_value)/l[n].rz); // LAYER_SI
 			} else if (n==metalidx-1) { // TIM layer (1, requires layer 0, 4)
-				psum += NP_as(l,v_cached[0],n) + SP_as(l,v_cached[0],n) + 
-				   EP_as(l,v_cached[0],n) + WP_as(l,v_cached[0],n) + 
-				   ((v_cached[0][above_off]-center_value)/l[metalidx-2].rz) + // metalidx-2
+				psum += ((v_cached[0][above_off]-center_value)/l[metalidx-2].rz) + // metalidx-2
 				   ((A3D(v,spidx,i,j,nl,nr,nc)-center_value)/l[n].rz); // must load from global memory (need it early)
 			} else if (n==c4idx) { //C4 layer (3, requires layer 6, 2)
-				psum += NP_as(l,v_cached[0],n) + SP_as(l,v_cached[0],n) + 
-				   EP_as(l,v_cached[0],n) + WP_as(l,v_cached[0],n) + 
-				   ((A3D(v,subidx,i,j,nl,nr,nc)-center_value)/l[subidx].rz) + // must load from global memory (need it early)
+				psum += ((A3D(v,subidx,i,j,nl,nr,nc)-center_value)/l[subidx].rz) +  // must load from global memory (need it early)
 				   ((v_cached[0][above_off]-center_value)/l[n].rz); // metalidx
 			} else if (n==subidx) { //Substrate layer (6, requires layer 7, 3)
-				psum += NP_as(l,v_cached[0],n) + SP_as(l,v_cached[0],n) + 
-				   EP_as(l,v_cached[0],n) + WP_as(l,v_cached[0],n) + 
-				   ((v_cached[0][below_off]-center_value)/l[solderidx].rz) + // solderidx
+				psum += ((v_cached[0][below_off]-center_value)/l[solderidx].rz) + // solderidx
 				   ((A3D(v,c4idx,i,j,nl,nr,nc)-center_value)/l[n].rz); // must load from global memory (OK)
 			} else if (n==pcbidx) { //PCB layer (8, requires layer 7)
-				psum += NP_as(l,v_cached[0],n) + SP_as(l,v_cached[0],n) + 
-				   EP_as(l,v_cached[0],n) + WP_as(l,v_cached[0],n) + 
-				   ((v_cached[0][above_off]-center_value)/l[n].rz); // solderidx
+				psum += ((v_cached[0][above_off]-center_value)/l[n].rz); // solderidx
 			} else if (n==hsidx) { // heatsink layer (5, requires layer 4)
-				psum += NP_as(l,v_cached[0],n) + SP_as(l,v_cached[0],n) + 
-				   EP_as(l,v_cached[0],n) + WP_as(l,v_cached[0],n) + 
-				   ((v_cached[0][above_off]-center_value)/l[spidx].rz); // spidx
+				psum += ((v_cached[0][above_off]-center_value)/l[spidx].rz); // spidx
 			} else {
 				/* sum the currents(power values) to cells north, south, 
 			 	* east, west, above and below
 			 	*/	
-				psum += NP_as(l,v_cached[0],n) + SP_as(l,v_cached[0],n) + 
-				   EP_as(l,v_cached[0],n) + WP_as(l,v_cached[0],n) + 
-				   AP_as(l,v_cached[0],n) + BP_as(l,v_cached[0],n);
+				psum += AP_as(l,v_cached[0],n) + BP_as(l,v_cached[0],n);
 			}
 		}
 		else {
