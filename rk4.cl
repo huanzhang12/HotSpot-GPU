@@ -189,8 +189,9 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 	// unsigned int thread_id = mad24(get_global_id(1), NUMBER_OF_ROWS, get_global_id(0));
 	unsigned int local_id = mad24(get_local_id(1), LOCAL_SIZE_0, get_local_id(0));
 	unsigned int num_blocks_mask = (0x1u << (31 - clz(mul24(NUM_GROUPS_1, NUM_GROUPS_0)))) - 0x1u;
-	uint threads_per_group = mul24(LOCAL_SIZE_0, LOCAL_SIZE_1);
+	uint threads_per_group = mul24((LOCAL_SIZE_0), (LOCAL_SIZE_1));
 	// unsigned int num_blocks_mask = (0x1u << (31 - clz(mul24(get_num_groups(1), get_num_groups(0))))) - 0x1u;
+	uint second_wave_front = (threads_per_group > 64) ? 64 : 1;
 
 	/* Do we need to calculate endpoint instead of reading it directly? */
 	bool do_endpoint = (h != 0.0);
@@ -230,7 +231,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 					 (x[SINK_C_S] - x[SINK_S])/(pk->r_hs2_y + pk->r_hs);
 			dv[SINK_S] = psum / (pk->c_hs_per + pk->c_amb_per);
 		}
-		else if (local_id == 1)
+		else if (local_id == second_wave_front)
 		{
 			/* sink outer west/east	*/
 			psum = (ambient - x[SINK_W])/(pk->r_hs_per + pk->r_amb_per) + 
@@ -253,7 +254,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 		{
 			local_result[threads_per_group] = (l[hsidx].ry / 2.0 + nc * pk->r_hs1_y);	
 		}
-		if (local_id == 1)
+		if (local_id == second_wave_front)
 		{
 			local_result[threads_per_group+1] = (x[SP_N] - x[SINK_C_N])/pk->r_sp_per_y +
 					(x[SINK_N] - x[SINK_C_N])/(pk->r_hs2_y + pk->r_hs);
@@ -277,7 +278,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 		{
 			local_result[threads_per_group] = (l[hsidx].ry / 2.0 + nc * pk->r_hs1_y);	
 		}
-		if (local_id == 1)
+		if (local_id == second_wave_front)
 		{
 			local_result[threads_per_group+1] = (x[SP_S] - x[SINK_C_S])/pk->r_sp_per_y +
 					(x[SINK_S] - x[SINK_C_S])/(pk->r_hs2_y + pk->r_hs);
@@ -303,7 +304,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 		{
 			local_result[threads_per_group] = (l[hsidx].rx / 2.0 + nr * pk->r_hs1_x);	
 		}
-		if (local_id == 1)
+		if (local_id == second_wave_front)
 		{
 			local_result[threads_per_group+1] = (x[SP_W] - x[SINK_C_W])/pk->r_sp_per_x +
 					(x[SINK_W] - x[SINK_C_W])/(pk->r_hs2_x + pk->r_hs);
@@ -327,7 +328,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 		{
 			local_result[threads_per_group] = (l[hsidx].rx / 2.0 + nr * pk->r_hs1_x);	
 		}
-		if (local_id == 1)
+		if (local_id == second_wave_front)
 		{
 			local_result[threads_per_group+1] = (x[SP_E] - x[SINK_C_E])/pk->r_sp_per_x +
 					(x[SINK_E] - x[SINK_C_E])/(pk->r_hs2_x + pk->r_hs);
@@ -425,7 +426,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			}
   	
 			/* PCB outer west/east	*/
-			if (local_id == 1)
+			if (local_id == second_wave_front)
 			{
 				psum = (ambient - x[PCB_W])/(pk->r_amb_sec_per) + 
 						 (x[PCB_C_W] - x[PCB_W])/(pk->r_pcb2_x + pk->r_pcb);
@@ -444,7 +445,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			{
 				local_result[threads_per_group] = (l[pcbidx].ry / 2.0 + nc * pk->r_pcb1_y);	
 			}
-			if (local_id == 1)
+			if (local_id == second_wave_front)
 			{
 				local_result[threads_per_group+1] = (x[SOLDER_N] - x[PCB_C_N])/pk->r_pcb_c_per_y +
 						(x[PCB_N] - x[PCB_C_N])/(pk->r_pcb2_y + pk->r_pcb);
@@ -468,7 +469,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			{
 				local_result[threads_per_group] = (l[pcbidx].ry / 2.0 + nc * pk->r_pcb1_y);	
 			}
-			if (local_id == 1)
+			if (local_id == second_wave_front)
 			{
 				local_result[threads_per_group+1] = (x[SOLDER_S] - x[PCB_C_S])/pk->r_pcb_c_per_y +
 						(x[PCB_S] - x[PCB_C_S])/(pk->r_pcb2_y + pk->r_pcb);
@@ -494,7 +495,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			{
 				local_result[threads_per_group] = (l[pcbidx].rx / 2.0 + nr * pk->r_pcb1_x);	
 			}
-			if (local_id == 1)
+			if (local_id == second_wave_front)
 			{
 				local_result[threads_per_group+1] = (x[SOLDER_W] - x[PCB_C_W])/pk->r_pcb_c_per_x +
 						(x[PCB_W] - x[PCB_C_W])/(pk->r_pcb2_x + pk->r_pcb);
@@ -518,7 +519,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 			{
 				local_result[threads_per_group] = (l[pcbidx].rx / 2.0 + nr * pk->r_pcb1_x);	
 			}
-			if (local_id == 1)
+			if (local_id == second_wave_front)
 			{
 				local_result[threads_per_group+1] = (x[SOLDER_E] - x[PCB_C_E])/pk->r_pcb_c_per_x +
 						(x[PCB_E] - x[PCB_C_E])/(pk->r_pcb2_x + pk->r_pcb);
