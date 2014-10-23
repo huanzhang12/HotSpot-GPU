@@ -6,7 +6,7 @@
 #elif defined(cl_amd_fp64)
     #pragma OPENCL EXTENSION cl_amd_fp64 : enable
 #else
-    #error "Double precision floating point not supported by OpenCL implementation."
+    #error "real precision floating point not supported by OpenCL implementation."
 #endif
 */
 
@@ -46,7 +46,7 @@ __kernel void rk4(__global float4* data,
 #define A3D(array,n,i,j,nl,nr,nc)		(array[(nr)*mul24((int)(n), (int)(nc)) + mad24((int)(i), (int)(nc), (int)(j))])
 #define A3D_offset(n,i,j,nl,nr,nc)		((nr)*mul24((int)(n), (int)(nc)) + mad24((int)(i), (int)(nc), (int)(j)))
 
-__kernel void rk4_average(__global double *y, __global double *k1, __global double *k2, __global double *k3, __global double *k4, double h, __global double *yout, unsigned int n) {
+__kernel void rk4_average(__global real *y, __global real *k1, __global real *k2, __global real *k3, __global real *k4, real h, __global real *yout, unsigned int n) {
 	int id = get_global_id(0);
 	int stride = get_global_size(0);
 	for(int i = id; i < n; i += stride) {
@@ -55,14 +55,14 @@ __kernel void rk4_average(__global double *y, __global double *k1, __global doub
 	}
 }
 
-__kernel void rk4_average_with_maxdiff(__global double *y, __global double *k1, __global double *k2, __global double *k3, __global double *k4, double h, __global double *yout, unsigned int n, __global double *ytemp,  __local double *local_result) {
+__kernel void rk4_average_with_maxdiff(__global real *y, __global real *k1, __global real *k2, __global real *k3, __global real *k4, real h, __global real *yout, unsigned int n, __global real *ytemp,  __local real *local_result) {
 	int stride = get_global_size(0);
 	int local_size = LOCAL_SIZE_1D;
 	int local_id = get_local_id(0);
 	int id = get_global_id(0);
-	double private_max = 0.0;
+	real private_max = 0.0;
 	for(int i = id; i < n; i += stride) {
-		double yout_value = mad(h, (mad(2.0, k2[i], k1[i]) + mad(2.0, k3[i], k4[i])) / 6.0, y[i]);
+		real yout_value = mad(h, (mad(2.0, k2[i], k1[i]) + mad(2.0, k3[i], k4[i])) / 6.0, y[i]);
 		private_max = max(private_max, fabs(ytemp[i] - yout_value));
 	}
 	local_result[local_id] = private_max;
@@ -77,12 +77,12 @@ __kernel void rk4_average_with_maxdiff(__global double *y, __global double *k1, 
 	yout[get_group_id(0)] = local_result[0];
 }
 
-__kernel void max_reduce(__global double *y, unsigned int n, __local double *local_result) {
+__kernel void max_reduce(__global real *y, unsigned int n, __local real *local_result) {
 	int stride = get_global_size(0);
 	int local_size = LOCAL_SIZE_1D;
 	int local_id = get_local_id(0);
 	int id = get_global_id(0);
-	double private_max = 0.0;
+	real private_max = 0.0;
 	for(int i = id; i < n; i += stride) {
 		private_max = max(private_max, y[i]);
 	}
@@ -99,10 +99,10 @@ __kernel void max_reduce(__global double *y, unsigned int n, __local double *loc
 }
 
 //finds sum of a row minus subVal
-void sum_row(__global double *v, int nl, int nr, int nc, __local double *local_result, int n, int i, double sub_val) {
+void sum_row(__global real *v, int nl, int nr, int nc, __local real *local_result, int n, int i, real sub_val) {
 	uint local_id = mad24(get_local_id(1), LOCAL_SIZE_0, get_local_id(0));
 	uint threads_per_group = mul24(LOCAL_SIZE_0, LOCAL_SIZE_1);
-	double private_sum = 0.0;
+	real private_sum = 0.0;
 	for(int j = local_id; j < nc; j += threads_per_group)
 		private_sum += (A3D(v,n,i,j,nl,nr,nc) - sub_val);
 	local_result[local_id] = private_sum;
@@ -115,10 +115,10 @@ void sum_row(__global double *v, int nl, int nr, int nc, __local double *local_r
 	}
 }
 
-void sum_row_with_endpoint(int nl, int nr, int nc, __local double *local_result, int n, int i, double sub_val, double h, __global double *k, __global double *y) {
+void sum_row_with_endpoint(int nl, int nr, int nc, __local real *local_result, int n, int i, real sub_val, real h, __global real *k, __global real *y) {
 	uint local_id = mad24(get_local_id(1), LOCAL_SIZE_0, get_local_id(0));
 	uint threads_per_group = mul24(LOCAL_SIZE_0, LOCAL_SIZE_1);
-	double private_sum = 0.0;
+	real private_sum = 0.0;
 	for(int j = local_id; j < nc; j += threads_per_group)
 		private_sum += (mad(h, A3D(k,n,i,j,nl,nr,nc), A3D(y,n,i,j,nl,nr,nc)) - sub_val);
 	local_result[local_id] = private_sum;
@@ -132,10 +132,10 @@ void sum_row_with_endpoint(int nl, int nr, int nc, __local double *local_result,
 }
 
 //finds sum of a column minus subVal
-void sum_col(__global double *v, int nl, int nr, int nc, __local double *local_result, int n, int j, double sub_val) {
+void sum_col(__global real *v, int nl, int nr, int nc, __local real *local_result, int n, int j, real sub_val) {
 	uint local_id = mad24(get_local_id(1), LOCAL_SIZE_0, get_local_id(0));
 	uint threads_per_group = mul24(LOCAL_SIZE_0, LOCAL_SIZE_1);
-	double private_sum = 0.0;
+	real private_sum = 0.0;
 	for(int i = local_id; i < nr; i += threads_per_group)
 		private_sum += (A3D(v,n,i,j,nl,nr,nc) - sub_val);
 	local_result[local_id] = private_sum;
@@ -148,10 +148,10 @@ void sum_col(__global double *v, int nl, int nr, int nc, __local double *local_r
 	}
 }
 
-void sum_col_with_endpoint(int nl, int nr, int nc, __local double *local_result, int n, int j, double sub_val, double h, __global double *k, __global double *y) {
+void sum_col_with_endpoint(int nl, int nr, int nc, __local real *local_result, int n, int j, real sub_val, real h, __global real *k, __global real *y) {
 	uint local_id = mad24(get_local_id(1), LOCAL_SIZE_0, get_local_id(0));
 	uint threads_per_group = mul24(LOCAL_SIZE_0, LOCAL_SIZE_1);
-	double private_sum = 0.0;
+	real private_sum = 0.0;
 	for(int i = local_id; i < nr; i += threads_per_group)
 		private_sum += (mad(h, A3D(k,n,i,j,nl,nr,nc), A3D(y,n,i,j,nl,nr,nc)) - sub_val);
 	local_result[local_id] = private_sum;
@@ -164,8 +164,8 @@ void sum_col_with_endpoint(int nl, int nr, int nc, __local double *local_result,
 	}
 }
 
-__kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__((max_constant_size(sizeof(gpu_grid_model_t)))), __constant gpu_layer_t *l __attribute__((max_constant_size(MAX_LAYER_SUPPORT*sizeof(gpu_layer_t)))), __global double *v, __global double *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local double *local_result, __local double *x, double h, __global double *k, __global double *y)
-// __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model, __constant gpu_layer_t *l, __global double *v, __global double *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local double *local_result, __local double *x, double h, __global double *k, __global double *y)
+__kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__((max_constant_size(sizeof(gpu_grid_model_t)))), __constant gpu_layer_t *l __attribute__((max_constant_size(MAX_LAYER_SUPPORT*sizeof(gpu_layer_t)))), __global real *v, __global real *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local real *local_result, __local real *x, real h, __global real *k, __global real *y)
+// __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model, __constant gpu_layer_t *l, __global real *v, __global real *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local real *local_result, __local real *x, real h, __global real *k, __global real *y)
 {
 
 	/* l is not used */
@@ -183,7 +183,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 	int spidx, hsidx, metalidx, c4idx, subidx, solderidx, pcbidx;
 	
 	/* pointer to the starting address of the extra nodes (now passed as an argument)	*/
-	// __global double *x = v + nl_nr_nc_product;
+	// __global real *x = v + nl_nr_nc_product;
 
 	unsigned int block_id = mad24(get_group_id(1), get_num_groups(0), get_group_id(0));
 	// unsigned int thread_id = mad24(get_global_id(1), NUMBER_OF_ROWS, get_global_id(0));
@@ -211,9 +211,9 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 	
 	/* shortcuts	*/
 	__constant gpu_package_RC_t *pk = &model->pack;
-	double ambient = model->config.ambient;
+	real ambient = model->config.ambient;
 	/* sum of the currents(power values)	*/
-	double psum;
+	real psum;
 
 	/* First block: sink outer computation */
 	if (block_id == (0 & num_blocks_mask))
@@ -705,13 +705,13 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 # define BP_as(l,v,n)		((below_off != center_off) ? (((v[below_off]) - (center_value))/l[n].rz)  : 0.0)
 # define AP_as(l,v,n)		((above_off != center_off) ? (((v[above_off]) - (center_value))/l[n-1].rz): 0.0)
 
-void load_v_to_shared(__global double *v, __local double * v_cached_layer, int n, unsigned int nl, unsigned int nr, unsigned int nc)
+void load_v_to_shared(__global real *v, __local real * v_cached_layer, int n, unsigned int nl, unsigned int nr, unsigned int nc)
 {
 	int i = get_global_id(1); // row (row-major)
 	int j = get_global_id(0); // column
 	int index = mad24(get_local_id(1) + 1, LOCAL_SIZE_0 + 2, get_local_id(0) + 1);
 	uint center_off = A3D_offset(n,i,j,nl,nr,nc);
-	double v_value = v[center_off];
+	real v_value = v[center_off];
 	v_cached_layer[index] = v_value; // local location: row = get_local_id(1)+1, column = get_local_id(0)+1
 	/* use the first and last worker rows to retrive the first and last extra rows */
 	if (get_local_id(1) == 0) {
@@ -735,12 +735,12 @@ void load_v_to_shared(__global double *v, __local double * v_cached_layer, int n
 }
 
 /* load v = y + k * h into local memory */
-void load_v_to_shared_with_endpoint(__global double *y, __global double *k, double h, __local double * v_cached_layer, int n, unsigned int nl, unsigned int nr, unsigned int nc, __global double *v, bool save_to_local, bool save_to_global)
+void load_v_to_shared_with_endpoint(__global real *y, __global real *k, real h, __local real * v_cached_layer, int n, unsigned int nl, unsigned int nr, unsigned int nc, __global real *v, bool save_to_local, bool save_to_global)
 {
 	int i = get_global_id(1); // row (row-major)
 	int j = get_global_id(0); // column
 	uint center_off = A3D_offset(n,i,j,nl,nr,nc);
-	double v_value = mad(h, k[center_off], y[center_off]);
+	real v_value = mad(h, k[center_off], y[center_off]);
 	if (save_to_local) {
 		int index = mad24(get_local_id(1) + 1, LOCAL_SIZE_0 + 2, get_local_id(0) + 1);
 		v_cached_layer[index] = v_value; // local location: row = get_local_id(1)+1, column = get_local_id(0)+1
@@ -776,7 +776,7 @@ void load_v_to_shared_with_endpoint(__global double *y, __global double *k, doub
 }
 
 
-void load_extra_to_shared_with_endpoint(__global double *y, __global double *k, double h, __local double * extra_cached, int n)
+void load_extra_to_shared_with_endpoint(__global real *y, __global real *k, real h, __local real * extra_cached, int n)
 {
 	int id = mad24(get_local_id(1), LOCAL_SIZE_0, get_local_id(0)); // row (row-major)
 	int stride = mul24(LOCAL_SIZE_1, LOCAL_SIZE_0);
@@ -787,7 +787,7 @@ void load_extra_to_shared_with_endpoint(__global double *y, __global double *k, 
 	barrier(CLK_LOCAL_MEM_FENCE);
 }
 
-void load_extra_to_shared(__global double *x, __local double * extra_cached, int n)
+void load_extra_to_shared(__global real *x, __local real * extra_cached, int n)
 {
 	int id = mad24(get_local_id(1), LOCAL_SIZE_0, get_local_id(0)); // row (row-major)
 	int stride = mul24(LOCAL_SIZE_1, LOCAL_SIZE_0);
@@ -799,29 +799,29 @@ void load_extra_to_shared(__global double *x, __local double * extra_cached, int
 }
 
 /*  Test correctness of local memory caching */
-__kernel void slope_fn_grid_gpu_test(__constant gpu_grid_model_t *model __attribute__((max_constant_size(sizeof(gpu_grid_model_t)))), __constant gpu_layer_t *l __attribute__((max_constant_size(MAX_LAYER_SUPPORT*sizeof(gpu_layer_t)))), __global double *v, __global double *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local double *local_result, __global double *p_cuboid)
+__kernel void slope_fn_grid_gpu_test(__constant gpu_grid_model_t *model __attribute__((max_constant_size(sizeof(gpu_grid_model_t)))), __constant gpu_layer_t *l __attribute__((max_constant_size(MAX_LAYER_SUPPORT*sizeof(gpu_layer_t)))), __global real *v, __global real *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local real *local_result, __global real *p_cuboid)
 {
 	int n;
 	int i = get_global_id(1); // row (row-major)
 	int j = get_global_id(0); // column
 	
 	/* sum of the currents(power values)	*/
-	double psum;
+	real psum;
 	
 	/* shortcuts for cell width(cw) and cell height(ch)	*/
-	double cw = model->width / model->cols;
-	double ch = model->height / model->rows;
+	real cw = model->width / model->cols;
+	real ch = model->height / model->rows;
 
 	/* shortcuts	*/
 	int spidx, hsidx, metalidx, c4idx, subidx, solderidx, pcbidx;
 	bool model_secondary = ENABLE_SECONDARY_MODEL;
-	double ambient = model->config.ambient;
-	double s_pcb = model->config.s_pcb;
+	real ambient = model->config.ambient;
+	real s_pcb = model->config.s_pcb;
 	/* pointer to the starting address of the extra nodes	*/
-	// __global double *x = v + mul24(nl, nr) * nc;
+	// __global real *x = v + mul24(nl, nr) * nc;
 
 	/* local memory cached v[] (4 layers maximum) */
-	__local double * v_cached[4];
+	__local real * v_cached[4];
 	n = mul24((LOCAL_SIZE_0 + 2), (LOCAL_SIZE_1 + 2));
 	v_cached[0] = local_result;
 	v_cached[1] = local_result + n;
@@ -841,7 +841,7 @@ __kernel void slope_fn_grid_gpu_test(__constant gpu_grid_model_t *model __attrib
 	
 	for(n=0; n < nl; n++) {
 		bool load_next_layer = (n == next_layer) && (next_layer + 1 < nl);
-		double psum = 0.0;
+		real psum = 0.0;
 		int n_s = n & 0x3;
 		if (load_next_layer) {
 			++next_layer;
@@ -864,8 +864,8 @@ __kernel void slope_fn_grid_gpu_test(__constant gpu_grid_model_t *model __attrib
  * equation is CdV + sum{(T - Ti)/Ri} = P 
  * so, slope = dV = [P + sum{(Ti-T)/Ri}]/C
  */
-__kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__((max_constant_size(sizeof(gpu_grid_model_t)))), __constant gpu_layer_t *l __attribute__((max_constant_size(MAX_LAYER_SUPPORT*sizeof(gpu_layer_t)))), __global double *v, __global double *dv, unsigned int nl_arg, unsigned int nr_arg, unsigned int nc_arg, __local double *local_result, __global double *p_cuboid, double h, __global double *k, __global double *y)
-// __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model, __constant gpu_layer_t *l, __global double *v, __global double *dv, unsigned int nl_arg, unsigned int nr_arg, unsigned int nc_arg, __local double *local_result, __global double *p_cuboid, double h, __global double *k, __global double *y)
+__kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__((max_constant_size(sizeof(gpu_grid_model_t)))), __constant gpu_layer_t *l __attribute__((max_constant_size(MAX_LAYER_SUPPORT*sizeof(gpu_layer_t)))), __global real *v, __global real *dv, unsigned int nl_arg, unsigned int nr_arg, unsigned int nc_arg, __local real *local_result, __global real *p_cuboid, real h, __global real *k, __global real *y)
+// __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model, __constant gpu_layer_t *l, __global real *v, __global real *dv, unsigned int nl_arg, unsigned int nr_arg, unsigned int nc_arg, __local real *local_result, __global real *p_cuboid, real h, __global real *k, __global real *y)
 {
 	int n;
 
@@ -892,14 +892,14 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__
 	bool do_endpoint = (h != 0.0);
 
 	/* local memory cached v[] (4 layers maximum) */
-	__local double * v_cached[4];
+	__local real * v_cached[4];
 	n = mul24((LOCAL_SIZE_0 + 2), (LOCAL_SIZE_1 + 2));
 	v_cached[0] = local_result;
 	v_cached[1] = local_result + n;
 	v_cached[2] = v_cached[1] + n;
 	v_cached[3] = v_cached[2] + n;
 	/* local memory cached extra nodes */
-	__local double * x = v_cached[3] + n;
+	__local real * x = v_cached[3] + n;
 	/* load the first 4 layers */
 	for(n=0; n < min(nl, 0x4u); n++) {
 		if (do_endpoint) {
@@ -936,7 +936,7 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__
 	int i = get_global_id(1); // row (row-major)
 	int j = get_global_id(0); // column
 	/* sum of the currents(power values)	*/
-	double psum;
+	real psum;
 	
 	/* for each grid cell	*/
 #if NUMBER_OF_LAYERS <= 4
@@ -1035,7 +1035,7 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__
 			if (j == 0)
 				psum += (x[SOLDER_W] - v_cached[0][center_off])/(l[n].rx/2.0 + nr*model->pack.r_solder1_x); 
 		}
-		double center_value = v_cached[0][center_off];
+		real center_value = v_cached[0][center_off];
 		uint north_off = center_off - nc_s; // A3D_offset(n_s,i_s-1,j_s,nl,nr_s,nc_s);
 		uint south_off = center_off + nc_s; // A3D_offset(n_s,i_s+1,j_s,nl,nr_s,nc_s);
 		uint west_off = center_off - 1; // A3D_offset(n_s,i_s,j_s-1,nl,nr_s,nc_s);

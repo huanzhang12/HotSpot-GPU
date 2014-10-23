@@ -9,9 +9,16 @@
 
 #include <time.h>
 #include <stdio.h>
+
+#if GPU_SINGLE_PRECISION > 0
+typedef float real;
+#else
+typedef double real;
+#endif
+
 #include "gpu_rk4.h"
 
-// #define FLUSH_DEBUG
+#define FLUSH_DEBUG
 // #define GPU_DEBUG_PRINT
 #define ENABLE_TIMER	1
 
@@ -22,7 +29,6 @@
 #endif
 
 #define DEBUG_POS 100
-
 
 enum kernel_fn_grid_args 	{ GRID_CONST_MODEL, GRID_CONST_LAYER, GRID_IO_V, GRID_OUT_DV, GRID_NL, GRID_NR, GRID_NC, GRID_LOCALMEM, GRID_IN_CUBOID, GRID_H, GRID_IN_K, GRID_IN_Y };
 enum kernel_average_args 	{ AVG_IN_Y, AVG_IN_K1, AVG_IN_K2, AVG_IN_K3, AVG_IN_K4, AVG_H, AVG_OUT_YOUT, AVG_N, AVG_IN_YTEMP, AVG_LOCALMEM };
@@ -105,7 +111,7 @@ void* gpu_allocate_cuboid_static(size_t size);
 void gpu_free_cuboid_static(void* cuboid);
 
 double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, double *h, double *yout);
-void rk4_core_gpu_kernel(gpu_config_t *config, void *model, cl_mem *d_y, cl_mem *d_k1, void *p, int n, double h, cl_mem *d_yout, cl_mem *d_ytemp, int do_maxdiff);
+void rk4_core_gpu_kernel(gpu_config_t *config, void *model, cl_mem *d_y, cl_mem *d_k1, void *p, int n, real h, cl_mem *d_yout, cl_mem *d_ytemp, int do_maxdiff);
 void rk4_core_gpu(gpu_config_t *config, void *model, double *y, double *k1, void *p, int n, double h, double *yout);
 void slope_fn_grid_gpu_kernel(gpu_config_t *config, grid_model_t *model, cl_mem *d_v, grid_model_vector_t *p, cl_mem *d_dv);
 void slope_fn_grid_gpu(gpu_config_t *config, grid_model_t *model, double *v, grid_model_vector_t *p, double *dv);

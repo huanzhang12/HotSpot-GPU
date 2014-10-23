@@ -96,16 +96,21 @@ void gpu_copy_constants(gpu_config_t *config, grid_model_t *model)
 	config->model.c_ready = model->c_ready;
 	config->model.has_lcf = model->has_lcf;
 	config->model.base_n_units = model->base_n_units;
-	memcpy(&config->model.pack, &model->pack, sizeof(gpu_package_RC_t));
-	memcpy(&config->model.config, &model->config, sizeof(gpu_thermal_config_t));
-	if (model->config.model_secondary)
-	{
-		max_layers = model->n_layers + DEFAULT_PACK_LAYERS;
+
+	// memcpy(&config->model.pack, &model->pack, sizeof(gpu_package_RC_t));
+	/* this will convert double to float, if necessary */
+	real* dst = (real*)&config->model.pack;
+	double* src = (double*)&model->pack;
+	for (i = 0; i < sizeof(config->model.pack) / sizeof(real); ++i) {
+		*dst++ = *src++;
 	}
-	else
-	{
-		max_layers = model->n_layers + DEFAULT_PACK_LAYERS + SEC_PACK_LAYERS;
-	}
+
+	// memcpy(&config->model.config, &model->config, sizeof(gpu_thermal_config_t));
+	config->model.config.ambient = model->config.ambient;
+	config->model.config.model_secondary = model->config.model_secondary;
+	config->model.config.r_convec_sec = model->config.r_convec_sec;
+	config->model.config.s_pcb = model->config.s_pcb;
+	max_layers = model->n_layers;
 	config->layer = (gpu_layer_t*) calloc(max_layers, sizeof(gpu_layer_t));
 	config->layer_size = max_layers * sizeof(gpu_layer_t);
 	for(i = 0; i < max_layers; ++i)
@@ -141,14 +146,16 @@ void gpu_check_error(int err, char* msg)
 void gpu_create_buffers(gpu_config_t *config, grid_model_t *model)
 {
 	int err;
-	size_t element_size = sizeof(double); // TODO: support single precision
+
+	size_t element_size = sizeof(real);
+	/* we initialize memory to NaN. If the kernel has unexpected accesses, NaN will propagate. */
+	real pattern = NAN;
 	config->element_size = element_size;
 	config->extra_size = ((model->config.model_secondary)? EXTRA + EXTRA_SEC : EXTRA) * element_size;
 	config->cuboid_size = model->rows * model->cols * model->n_layers * element_size;
 	config->vector_size = config->extra_size + config->cuboid_size;
 
-	/* we initialize memory to NaN. If the kernel has unexpected accesses, NaN will propagate. */
-	double pattern = NAN;
+
 	/* prepare device memory */
 	config->d_v = clCreateBuffer(config->_cl_context, CL_MEM_READ_WRITE, config->vector_size, NULL, &err);
 	err |= clEnqueueFillBuffer(config->_cl_queue, config->d_v, &pattern, element_size, 0, config->vector_size, 0, NULL, NULL);
@@ -215,7 +222,12 @@ struct timespec gpu_perf_timediff(struct timespec start, struct timespec end)
 
 void* gpu_allocate_cuboid_static(size_t size)
 {
-	if (current_gpu_config == NULL || !current_gpu_config->gpu_enabled || size != current_gpu_config->vector_size) {
+	/* dcuboid_tail will always request double size even if single precison is enabled. */
+	/* However, only half of the array is used if we do GPU computation. pinned_h_cuboid will only have half of the requested size */
+	/* We must make sure that current_gpu_config and current_gpu_config->gpu_enabled is set correctly if we are not doing GPU */
+	size_t adj_vector_size = current_gpu_config != NULL ? current_gpu_config->vector_size / current_gpu_config->element_size * sizeof(double) : 0;
+	if (current_gpu_config == NULL || !current_gpu_config->gpu_enabled || size != adj_vector_size) {
+	// if(1) {
 		void* p = malloc(size);
 		// printf("malloc %ld bytes %p\n", size, p);
 		return p;
@@ -234,6 +246,7 @@ void* gpu_allocate_cuboid_static(size_t size)
 void gpu_free_cuboid_static(void* cuboid)
 {
 	if (current_gpu_config == NULL || !current_gpu_config->gpu_enabled || cuboid != current_gpu_config->pinned_h_cuboid) {
+	// if (1) {
 		// printf("freeing %p\n", cuboid);
 		free(cuboid);
 		return;
@@ -268,11 +281,11 @@ void gpu_print_array(gpu_config_t *config, cl_mem d_mem, size_t offset, size_t s
 {
 #ifdef GPU_DEBUG_PRINT
 	int i;
-	double * buf = (double*)malloc(size * sizeof(double));
+	real * buf = (real*)malloc(size * sizeof(real));
 	if (msg == NULL) {
 		msg = "";
 	}
-	clEnqueueReadBuffer(config->_cl_queue, d_mem, CL_TRUE, offset * sizeof(double), size * sizeof(double), buf, 0, NULL, NULL);
+	clEnqueueReadBuffer(config->_cl_queue, d_mem, CL_TRUE, offset * sizeof(real), size * sizeof(real), buf, 0, NULL, NULL);
 	for (i = 0; i < size; ++i) {
 		printf("%s%.*g\n", msg, 21, buf[i]);
 	}
@@ -356,9 +369,11 @@ void gpu_init(gpu_config_t *config, grid_model_t *model)
 	config->_cl_program = clCreateProgramWithSource(config->_cl_context, 1, (const char**)&config->_cl_kernel_string, &config->_cl_kernel_size, &err);
 	gpu_check_error(err, "Couldn't create the OpenCL program");
 	int vector_size = config->vector_size / config->element_size;
-	sprintf(compiler_options, "-cl-denorms-are-zero -cl-strict-aliasing -cl-fast-relaxed-math "\
-			"-DENABLE_SECONDARY_MODEL=%d -DNUMBER_OF_LAYERS=%d -DLOCAL_SIZE_1=(size_t)%d -DLOCAL_SIZE_0=(size_t)%d -DNUMBER_OF_ROWS=(size_t)%d -DNUMBER_OF_COLS=(size_t)%d -DLOCAL_SIZE_1D=(size_t)%d",
-			model->config.model_secondary, model->n_layers, (int)config->local_work_size[1], (int)config->local_work_size[0], model->rows, model->cols, (int)(config->local_work_size[0] * config->local_work_size[1]));
+	sprintf(compiler_options, "-cl-denorms-are-zero -cl-strict-aliasing -cl-fast-relaxed-math " \
+			"-DENABLE_SECONDARY_MODEL=%d -DNUMBER_OF_LAYERS=%d -DLOCAL_SIZE_1=(size_t)%d -DLOCAL_SIZE_0=(size_t)%d -DNUMBER_OF_ROWS=(size_t)%d -DNUMBER_OF_COLS=(size_t)%d -DLOCAL_SIZE_1D=(size_t)%d " \
+			"-Dreal=%s",
+			model->config.model_secondary, model->n_layers, (int)config->local_work_size[1], (int)config->local_work_size[0], model->rows, model->cols, (int)(config->local_work_size[0] * config->local_work_size[1]),
+			config->element_size == sizeof(double) ? "double" : "float -cl-single-precision-constant");
 	// Build OpenCL program
 	printf("compiling kernel with options: %s\n", compiler_options);
 	err = clBuildProgram(config->_cl_program, 0, NULL, compiler_options, NULL, NULL);
@@ -490,16 +505,12 @@ void gpu_destroy(gpu_config_t *config)
 double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, double *h, double *yout)
 {
 	int i;
-	double max, new_h = (*h);
-	// double * input;
-	// double * output;
-
-	// input = dvector(n);
-	// output = dvector(n);
+	real max, new_h = (*h);
 
 	size_t buffer_size = config->vector_size;
 	// printf("buffer_size = %zu, n = %d\n", buffer_size, n);
 	/* copy p->cuboid to device */
+	/* if cuboid is single precision, it will be intialized as single precision from the caller */
 	clEnqueueWriteBuffer(config->_cl_queue, config->d_p_cuboid, CL_FALSE, 0, buffer_size, ((grid_model_vector_t*)p)->cuboid[0][0], 0, NULL, NULL);
 	/* copy y to device */
 	clEnqueueWriteBuffer(config->_cl_queue, config->d_y, CL_FALSE, 0, buffer_size, y, 0, NULL, NULL);
@@ -513,7 +524,8 @@ double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, dou
 	slope_fn_grid_gpu_kernel(config, model, &config->d_y, p, &config->d_k1);
 	// slope_fn_grid_gpu(config, model, input, p, output);
 	// clEnqueueWriteBuffer(config->_cl_queue, config->d_k1, CL_TRUE, 0, buffer_size, output, 0, NULL, NULL);
-
+	//sleep(1);
+	//printf("First kernel done.\n");
 	gpu_print_array(config, config->d_k1, DEBUG_POS, 1, "k1:\t");
 	/* try until accuracy is achieved	*/
 	do {
@@ -554,7 +566,7 @@ double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, dou
 				max = t1[i];
 		*/
 		clEnqueueReadBuffer(config->_cl_queue, config->d_dv, CL_TRUE, 0, config->element_size, config->pinned_h_result, 0, NULL, NULL);
-		max = ((double*)config->pinned_h_result)[0]; // TODO: support single precision
+		max = ((real*)config->pinned_h_result)[0]; // TODO: support single precision
 
 		/* 
 		 * compute the correct step size: see equation 
@@ -653,10 +665,10 @@ void rk4_core_gpu(gpu_config_t *config, void *model, double *y, double *k1, void
 	free_dvector(t);
 }
 
-void rk4_core_gpu_kernel(gpu_config_t *config, void *model, cl_mem *d_y, cl_mem *d_k1, void *p, int n, double h, cl_mem *d_yout, cl_mem *d_ytemp, int do_maxdiff)
+void rk4_core_gpu_kernel(gpu_config_t *config, void *model, cl_mem *d_y, cl_mem *d_k1, void *p, int n, real h, cl_mem *d_yout, cl_mem *d_ytemp, int do_maxdiff)
 {
 	int i;
-	double h_real;
+	real h_real;
 	int err;
 	/* k2 is the slope at the trial midpoint (t) found using
 	 * slope k1 (which is at the starting point).
@@ -761,8 +773,8 @@ void slope_fn_grid_gpu_kernel(gpu_config_t *config, grid_model_t *model, cl_mem 
 	int err;
 
 	/* disable endpoint calculation */
-	double h = 0.0;
-	err = clSetKernelArg(config->_cl_kernel_rk4, GRID_H, sizeof(double), &h);
+	real h = 0.0;
+	err = clSetKernelArg(config->_cl_kernel_rk4, GRID_H, sizeof(h), &h);
 	/* input from d_v */
 	err |= clSetKernelArg(config->_cl_kernel_rk4, GRID_IO_V, sizeof(cl_mem), d_v);
 	/* output to d_dv */

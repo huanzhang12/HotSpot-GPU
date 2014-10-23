@@ -77,98 +77,98 @@ typedef struct gpu_package_RC_t_st
 {
 	/* lateral resistances	*/
 	/* peripheral spreader nodes */
-	double r_sp1_x;
-	double r_sp1_y;
+	real r_sp1_x;
+	real r_sp1_y;
 	/* sink's inner periphery */
-	double r_hs1_x;
-	double r_hs1_y;
-	double r_hs2_x;
-	double r_hs2_y;
+	real r_hs1_x;
+	real r_hs1_y;
+	real r_hs2_x;
+	real r_hs2_y;
 	/* sink's outer periphery */
-	double r_hs;
+	real r_hs;
 	
 	/* vertical resistances */
 	/* peripheral spreader nodes */
-	double r_sp_per_x;
-	double r_sp_per_y;
+	real r_sp_per_x;
+	real r_sp_per_y;
 	/* sink's inner periphery	*/
-	double r_hs_c_per_x;
-	double r_hs_c_per_y;
+	real r_hs_c_per_x;
+	real r_hs_c_per_y;
 	/* sink's outer periphery	*/
-	double r_hs_per;
+	real r_hs_per;
 
 	/* vertical capacitances	*/
 	/* peripheral spreader nodes */
-	double c_sp_per_x;
-	double c_sp_per_y;
+	real c_sp_per_x;
+	real c_sp_per_y;
 	/* sink's inner periphery	*/
-	double c_hs_c_per_x;
-	double c_hs_c_per_y;
+	real c_hs_c_per_x;
+	real c_hs_c_per_y;
 	/* sink's outer periphery	*/
-	double c_hs_per;
+	real c_hs_per;
 
 	/* vertical R's and C's to ambient	*/
 	/* sink's inner periphery	*/
-	double r_amb_c_per_x;
-	double c_amb_c_per_x;
-	double r_amb_c_per_y;
-	double c_amb_c_per_y;
+	real r_amb_c_per_x;
+	real c_amb_c_per_x;
+	real r_amb_c_per_y;
+	real c_amb_c_per_y;
 	/* sink's outer periphery	*/
-	double r_amb_per;
-	double c_amb_per;
+	real r_amb_per;
+	real c_amb_per;
 	
 	/* secondary path R's and C's */
 	
 	/* lateral resistances	*/
 	/* peripheral package substrate nodes */
-	double r_sub1_x;
-	double r_sub1_y;
+	real r_sub1_x;
+	real r_sub1_y;
 	/* peripheral solder ball nodes */
-	double r_solder1_x;
-	double r_solder1_y;
+	real r_solder1_x;
+	real r_solder1_y;
 	/* PCB's inner periphery */
-	double r_pcb1_x;
-	double r_pcb1_y;
-	double r_pcb2_x;
-	double r_pcb2_y;
+	real r_pcb1_x;
+	real r_pcb1_y;
+	real r_pcb2_x;
+	real r_pcb2_y;
 	/* PCB's outer periphery */
-	double r_pcb;
+	real r_pcb;
 	
 	/* vertical resistances */
 	/* peripheral package substrate nodes */
-	double r_sub_per_x;
-	double r_sub_per_y;
+	real r_sub_per_x;
+	real r_sub_per_y;
 	/* peripheral solder ball nodes */
-	double r_solder_per_x;
-	double r_solder_per_y;
+	real r_solder_per_x;
+	real r_solder_per_y;
 	/* PCB's inner periphery	*/
-	double r_pcb_c_per_x;
-	double r_pcb_c_per_y;
+	real r_pcb_c_per_x;
+	real r_pcb_c_per_y;
 	/* PCB's outer periphery	*/
-	double r_pcb_per;
+	real r_pcb_per;
 
 	/* vertical capacitances	*/
 	/* peripheral package substrate nodes */
-	double c_sub_per_x;
-	double c_sub_per_y;
+	real c_sub_per_x;
+	real c_sub_per_y;
 	/* peripheral solder ballnodes */
-	double c_solder_per_x;
-	double c_solder_per_y;
+	real c_solder_per_x;
+	real c_solder_per_y;
 	/* PCB's inner periphery	*/
-	double c_pcb_c_per_x;
-	double c_pcb_c_per_y;
+	real c_pcb_c_per_x;
+	real c_pcb_c_per_y;
 	/* PCB's outer periphery	*/
-	double c_pcb_per;
+	real c_pcb_per;
 
 	/* vertical R's and C's to ambient at PCB	*/
 	/* PCB's inner periphery	*/
-	double r_amb_sec_c_per_x;
-	double c_amb_sec_c_per_x;
-	double r_amb_sec_c_per_y;
-	double c_amb_sec_c_per_y;
+	real r_amb_sec_c_per_x;
+	real c_amb_sec_c_per_x;
+	real r_amb_sec_c_per_y;
+	real c_amb_sec_c_per_y;
 	/* PCB's outer periphery	*/
-	double r_amb_sec_per;
-	double c_amb_sec_per;
+	real r_amb_sec_per;
+	real c_amb_sec_per;
 	
 }gpu_package_RC_t;
 
@@ -184,16 +184,16 @@ typedef struct gpu_layer_t_st
 	int no;				/* serial number	*/
 	int has_lateral;	/* model lateral spreading of heat?	*/
 	int has_power;		/* dissipates power?	*/
-	double k;			/* 1/resistivity	*/
-	double k1;	/* thermal conductivity of the other material in some layers, such as C4/underfill */
-	double thickness;
-	double sp;			/* specific heat capacity	*/
-	double sp1; /* specific heat of the other material in some layers, such as C4/underfill */
+	real k;			/* 1/resistivity	*/
+	real k1;	/* thermal conductivity of the other material in some layers, such as C4/underfill */
+	real thickness;
+	real sp;			/* specific heat capacity	*/
+	real sp1; /* specific heat of the other material in some layers, such as C4/underfill */
 
 	/* extracted information	*/
-	double rx, ry, rz;	/* x, y and z resistors	*/
-	double rx1, ry1, rz1; /* resistors of the other material in some layers, e.g. c4/underfill*/
-	double c, c1;			/* capacitance	*/
+	real rx, ry, rz;	/* x, y and z resistors	*/
+	real rx1, ry1, rz1; /* resistors of the other material in some layers, e.g. c4/underfill*/
+	real c, c1;			/* capacitance	*/
 
 	/* block-grid map - 2-d array of block lists	*/
 	// blist_t ***b2gmap;
@@ -204,49 +204,13 @@ typedef struct gpu_layer_t_st
 /* thermal model configuration for GPU (pointers and unused variables removed) */
 typedef struct gpu_thermal_config_t_st
 {
-	/* chip specs	*/
-	double t_chip;	/* chip thickness in meters	*/
-	double k_chip;	/* chip thermal conductivity */
-	double p_chip;	/* chip specific heat */
-	double thermal_threshold;	/* temperature threshold for DTM (Kelvin)*/
-
-	/* heat sink specs	*/
-	double c_convec;	/* convection capacitance in J/K */
-	double r_convec;	/* convection resistance in K/W	*/
-	double s_sink;	/* heatsink side in meters	*/
-	double t_sink;	/* heatsink thickness in meters	*/
-	double k_sink;	/* heatsink thermal conductivity */
-	double p_sink;	/* heatsink specific heat */
-
-	/* heat spreader specs	*/
-	double s_spreader;	/* spreader side in meters	*/
-	double t_spreader;	/* spreader thickness in meters	*/
-	double k_spreader;	/* spreader thermal conductivity */
-	double p_spreader;	/* spreader specific heat */
-
-	/* interface material specs	*/
-	double t_interface;	/* interface material thickness in meters	*/
-	double k_interface;	/* interface material thermal conductivity */
-	double p_interface; /* interface material specific heat */
-	
 	/* secondary path specs */
 	int model_secondary;
-	double r_convec_sec;
-	double c_convec_sec;
-	int n_metal;
-	double t_metal;
-	double t_c4;
-	double s_c4;
-	int n_c4;
-	double s_sub;
-	double t_sub;
-	double s_solder;
-	double t_solder;
-	double s_pcb;
-	double t_pcb;
+	real r_convec_sec;
+	real s_pcb;
 
 	/* others	*/
-	double ambient;			/* ambient temperature in kelvin	*/
+	real ambient;			/* ambient temperature in kelvin	*/
 }gpu_thermal_config_t;
 
 /* grid thermal model for GPU (pointers and unused variables removed) */
@@ -263,8 +227,8 @@ typedef struct gpu_grid_model_t_st
 	int rows;
 	int cols;
 	/* dimensions	*/
-	double width;
-	double height;
+	real width;
+	real height;
 
 	/* package parameters	*/
 	gpu_package_RC_t pack;

@@ -1570,6 +1570,151 @@ void xlate_temp_g2b(grid_model_t *model, double *b, grid_model_vector_t *g)
 		b[base+i] = g->extra[i];
 }
 
+#if GPGPU > 0
+/* translate power/temperature between block and grid vectors	*/
+void xlate_vector_b2g_gpu(grid_model_t *model, double *b, grid_model_vector_t *g, int type)
+{
+	int i, j, n, base = 0;
+	double area;
+
+	real* p_cuboid;
+	real* p_extra = (real*)g->cuboid[0][0] + model->n_layers * model->rows * model->cols;
+
+	int extra_nodes;
+	if (model->config.model_secondary)
+		extra_nodes = EXTRA + EXTRA_SEC;
+	else
+		extra_nodes = EXTRA;
+
+	/* area of a single grid cell	*/
+	area = (model->width * model->height) / (model->cols * model->rows);
+
+	for(n=0; n < model->n_layers; n++) {
+		for(i=0; i < model->rows; i++) {
+			p_cuboid = (real*)g->cuboid[0][0] + n * model->rows * model->cols + i * model->cols;
+			for(j=0; j < model->cols; j++) {
+				/* for each grid cell, the power density / temperature are
+				 * the average of the power densities / temperatures of the
+				 * blocks in it weighted by their occupancies
+				 */
+				/* convert power density to power	*/
+				if (type == V_POWER)
+					p_cuboid[j] = blist_avg(model->layers[n].b2gmap[i][j],
+										 model->layers[n].flp, &b[base], type) * area;
+				/* no conversion necessary for temperature	*/
+				else if (type == V_TEMP)
+					p_cuboid[j] = blist_avg(model->layers[n].b2gmap[i][j],
+										 model->layers[n].flp, &b[base], type);
+				else
+					fatal("unknown vector type\n");
+			}
+		}
+		/* keep track of the beginning address of this layer in the
+		 * block power vector
+		 */
+		base += model->layers[n].flp->n_units;
+	}
+
+	/* extra spreader and sink nodes	*/
+	for(i=0; i < extra_nodes; i++)
+		p_extra[i] = b[base+i];
+}
+
+/* translate temperature between grid and block vectors	*/
+void xlate_temp_g2b_gpu(grid_model_t *model, double *b, grid_model_vector_t *g)
+{
+	int i, j, n, u, base = 0, count;
+	int i1, j1, i2, j2, ci1, cj1, ci2, cj2;
+	double min, max, avg;
+
+	real *p_cuboid1, *p_cuboid2;
+	real* p_extra = (real*)g->cuboid[0][0] + model->n_layers * model->rows * model->cols;
+
+	int extra_nodes;
+	if (model->config.model_secondary)
+		extra_nodes = EXTRA + EXTRA_SEC;
+	else
+		extra_nodes = EXTRA;
+
+	for(n=0; n < model->n_layers; n++) {
+		for(u=0; u < model->layers[n].flp->n_units; u++) {
+			/* extent of this unit in grid cell units	*/
+			i1 = model->layers[n].g2bmap[u].i1;
+			j1 = model->layers[n].g2bmap[u].j1;
+			i2 = model->layers[n].g2bmap[u].i2;
+			j2 = model->layers[n].g2bmap[u].j2;
+
+			/* map the center grid cell's temperature to the block	*/
+			if (model->map_mode == GRID_CENTER) {
+				/* center co-ordinates	*/
+				ci1 = (i1 + i2) / 2;
+				cj1 = (j1 + j2) / 2;
+				/* in case of even no. of cells, center
+				 * is the average of two central cells
+				 */
+				/* ci2 = ci1-1 when even, ci1 otherwise	*/
+				ci2 = ci1 - !((i2-i1) % 2);
+				/* cj2 = cj1-1 when even, cj1 otherwise	*/
+				cj2 = cj1 - !((j2-j1) % 2);
+				p_cuboid1 = (real*)g->cuboid[0][0] + n * model->rows * model->cols + ci1 * model->cols;
+				p_cuboid2 = (real*)g->cuboid[0][0] + n * model->rows * model->cols + ci2 * model->cols;
+				b[base+u] = (p_cuboid1[cj1] + p_cuboid2[cj1] +
+						p_cuboid1[cj2] + p_cuboid2[cj2]) / 4;
+				continue;
+			}
+
+			/* find the min/max/avg temperatures of the
+			 * grid cells in this block
+			 */
+			avg = 0.0;
+			count = 0;
+
+			p_cuboid1 = (real*)g->cuboid[0][0] + n * model->rows * model->cols + i1 * model->cols;
+			min = max =p_cuboid1[j1];
+			for(i=i1; i < i2; i++) {
+				p_cuboid1 = (real*)g->cuboid[0][0] + n * model->rows * model->cols + i * model->cols;;
+				for(j=j1; j < j2; j++) {
+					avg += p_cuboid1[j];
+					if (p_cuboid1[j] < min)
+						min = p_cuboid1[j];
+					if (p_cuboid1[j] > max)
+						max = p_cuboid1[j];
+					count++;
+				}
+			}
+
+			/* map to output accordingly	*/
+			switch (model->map_mode)
+			{
+				case GRID_AVG:
+					b[base+u] = avg / count;
+					break;
+				case GRID_MIN:
+					b[base+u] = min;
+					break;
+				case GRID_MAX:
+					b[base+u] = max;
+					break;
+				/* taken care of already	*/
+				case GRID_CENTER:
+					break;
+				default:
+					fatal("unknown mapping mode\n");
+					break;
+			}
+		}
+		/* keep track of the beginning address of this layer in the
+		 * block power vector
+		 */
+		base += model->layers[n].flp->n_units;
+	}
+
+	/* extra spreader and sink nodes	*/
+	for(i=0; i < extra_nodes; i++)
+		b[base+i] = p_extra[i];
+}
+#endif // GPGPU > 0
+
 /* setting package nodes' power numbers	*/
 void set_internal_power_grid(grid_model_t *model, double *power)
 {
@@ -2920,14 +3065,30 @@ void compute_temp_grid(grid_model_t *model, double *power, double *temp, double 
 	set_internal_power_grid(model, power);
 
 	/* map the block power/temp numbers to the grid	*/
-	xlate_vector_b2g(model, power, p, V_POWER);
+#if GPGPU > 0
+	if (gpu_config->gpu_enabled) {
+		xlate_vector_b2g_gpu(model, power, p, V_POWER);
+	}
+	else
+#endif
+	{
+		xlate_vector_b2g(model, power, p, V_POWER);
+	}
 
 	/* if temp is NULL, re-use the temperature from the
 	 * last call. otherwise, translate afresh and remember 
 	 * the grid and block temperature arrays for future use
 	 */
 	if (temp != NULL) {
-		xlate_vector_b2g(model, temp, model->last_trans, V_TEMP);
+#if GPGPU > 0
+		if (gpu_config->gpu_enabled) {
+			xlate_vector_b2g_gpu(model, temp, model->last_trans, V_TEMP);
+		}
+		else
+#endif
+		{
+			xlate_vector_b2g(model, temp, model->last_trans, V_TEMP);
+		}
 		model->last_temp = temp;
 	}	
 
@@ -2969,8 +3130,15 @@ void compute_temp_grid(grid_model_t *model, double *power, double *temp, double 
 	#endif
 
 	/* map the temperature numbers back	*/
-	xlate_temp_g2b(model, model->last_temp, model->last_trans);
-
+#if GPGPU > 0
+	if (gpu_config->gpu_enabled) {
+		xlate_temp_g2b_gpu(model, model->last_temp, model->last_trans);
+	}
+	else
+#endif
+	{
+		xlate_temp_g2b(model, model->last_temp, model->last_trans);
+	}
 	free_grid_model_vector(p);
 }
 
