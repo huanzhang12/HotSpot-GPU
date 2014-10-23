@@ -146,6 +146,7 @@ void gpu_check_error(int err, char* msg)
 void gpu_create_buffers(gpu_config_t *config, grid_model_t *model)
 {
 	int err;
+	int i, j;
 
 	size_t element_size = sizeof(real);
 	/* we initialize memory to NaN. If the kernel has unexpected accesses, NaN will propagate. */
@@ -205,6 +206,24 @@ void gpu_create_buffers(gpu_config_t *config, grid_model_t *model)
 	config->pinned_h_cuboid = clEnqueueMapBuffer(config->_cl_queue, config->h_cuboid, CL_TRUE, CL_MAP_READ | CL_MAP_WRITE, 0, config->vector_size, 0, NULL, NULL, &err);
 	gpu_check_error(err, "clEnqueueMapBuffer() for h_cuboid failed.");
 	config->h_cuboid_reference = 0;
+	/* host memory for last_trans (the input y[]) */
+	config->h_y = clCreateBuffer(config->_cl_context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, config->vector_size, NULL, &err);
+	gpu_check_error(err, "clCreateBuffer() for h_y failed.");
+	config->pinned_h_y = clEnqueueMapBuffer(config->_cl_queue, config->h_y, CL_TRUE, CL_MAP_READ | CL_MAP_WRITE, 0, config->vector_size, 0, NULL, NULL, &err);
+	gpu_check_error(err, "clEnqueueMapBuffer() for h_y failed.");
+	/* Use the pinned buffer in model */
+	free(model->last_trans->cuboid[0][0]);
+	model->last_trans->cuboid[0][0] = config->pinned_h_y;
+	/* fix pointers in cuboid array */
+	/* remaining pointers of the 2-d pointer array	*/
+	for (i = 0; i < model->n_layers; i++)
+		for (j = 0; j < model->rows; j++)
+			/* to reach the jth row in the ith layer,
+			 * one has to cross i layers i.e., i*(nr*nc)
+			 * values first and then j rows i.e., j*nc
+			 * values next
+			 */
+			model->last_trans->cuboid[i][j] =  model->last_trans->cuboid[0][0] + (model->n_layers * model->rows) * i + model->rows * j;
 }
 
 struct timespec gpu_perf_timediff(struct timespec start, struct timespec end)
@@ -245,6 +264,11 @@ void* gpu_allocate_cuboid_static(size_t size)
 
 void gpu_free_cuboid_static(void* cuboid)
 {
+	if (current_gpu_config != NULL && cuboid == current_gpu_config->pinned_h_y)
+	{
+		// the pinned buffer has been freed by gpu_destroy
+		return;
+	}
 	if (current_gpu_config == NULL || !current_gpu_config->gpu_enabled || cuboid != current_gpu_config->pinned_h_cuboid) {
 	// if (1) {
 		// printf("freeing %p\n", cuboid);
@@ -273,8 +297,10 @@ void gpu_delete_buffers(gpu_config_t *config)
 	clReleaseMemObject(config->d_c_layer);
 	clEnqueueUnmapMemObject(config->_cl_queue, config->h_result, config->pinned_h_result, 0, NULL, NULL);
 	clEnqueueUnmapMemObject(config->_cl_queue, config->h_cuboid, config->pinned_h_cuboid, 0, NULL, NULL);
+	clEnqueueUnmapMemObject(config->_cl_queue, config->h_y, config->pinned_h_y, 0, NULL, NULL);
 	clReleaseMemObject(config->h_result);
 	clReleaseMemObject(config->h_cuboid);
+	clReleaseMemObject(config->h_y);
 }
 
 void gpu_print_array(gpu_config_t *config, cl_mem d_mem, size_t offset, size_t size, char* msg)
@@ -484,7 +510,7 @@ void gpu_destroy(gpu_config_t *config)
 	clReleaseCommandQueue(config->_cl_queue);
 	clReleaseProgram(config->_cl_program);
 	clReleaseContext(config->_cl_context);
-	current_gpu_config = NULL; // prevents pinned memory allocation
+	config->gpu_enabled = 0; // prevents pinned memory allocation for steady state calculation
 	puts("OpenCL environment has been cleaned up.\n");
 	if (config->cpu_dma != NULL) {
 		fclose(config->cpu_dma);
@@ -509,6 +535,7 @@ double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, dou
 
 	size_t buffer_size = config->vector_size;
 	// printf("buffer_size = %zu, n = %d\n", buffer_size, n);
+	// printf("y = %p, yout = %p, p->cuboid = %p\n", y, yout, ((grid_model_vector_t*)p)->cuboid[0][0]);
 	/* copy p->cuboid to device */
 	/* if cuboid is single precision, it will be intialized as single precision from the caller */
 	clEnqueueWriteBuffer(config->_cl_queue, config->d_p_cuboid, CL_FALSE, 0, buffer_size, ((grid_model_vector_t*)p)->cuboid[0][0], 0, NULL, NULL);
