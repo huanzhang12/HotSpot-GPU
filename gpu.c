@@ -39,6 +39,9 @@ gpu_config_t default_gpu_config(void)
 	config._cl_program = NULL;
 	config._cl_queue = NULL;
 
+	config.last_h_y = NULL;
+	config.last_io_buf = 0; // input y, output ytemp
+
 	return config;
 }
 
@@ -244,7 +247,7 @@ void* gpu_allocate_cuboid_static(size_t size)
 	/* dcuboid_tail will always request double size even if single precison is enabled. */
 	/* However, only half of the array is used if we do GPU computation. pinned_h_cuboid will only have half of the requested size */
 	/* We must make sure that current_gpu_config and current_gpu_config->gpu_enabled is set correctly if we are not doing GPU */
-	size_t adj_vector_size = current_gpu_config != NULL ? current_gpu_config->vector_size / current_gpu_config->element_size * sizeof(double) : 0;
+	size_t adj_vector_size = (current_gpu_config != NULL && current_gpu_config->gpu_enabled) ? current_gpu_config->vector_size / current_gpu_config->element_size * sizeof(double) : 0;
 	if (current_gpu_config == NULL || !current_gpu_config->gpu_enabled || size != adj_vector_size) {
 	// if(1) {
 		void* p = malloc(size);
@@ -502,11 +505,12 @@ void gpu_destroy(gpu_config_t *config)
 	gpu_delete_buffers(config);
 
 	// TODO
+	clFinish(config->_cl_queue);
 	clReleaseKernel(config->_cl_kernel_rk4);
 	clReleaseKernel(config->_cl_kernel_average);
 	clReleaseKernel(config->_cl_kernel_average_with_maxdiff);
 	clReleaseKernel(config->_cl_kernel_max_reduce);
-
+	
 	clReleaseCommandQueue(config->_cl_queue);
 	clReleaseProgram(config->_cl_program);
 	clReleaseContext(config->_cl_context);
@@ -532,6 +536,7 @@ double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, dou
 {
 	int i;
 	real max, new_h = (*h);
+	cl_mem *d_input, *d_output;
 
 	size_t buffer_size = config->vector_size;
 	// printf("buffer_size = %zu, n = %d\n", buffer_size, n);
@@ -539,8 +544,25 @@ double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, dou
 	/* copy p->cuboid to device */
 	/* if cuboid is single precision, it will be intialized as single precision from the caller */
 	clEnqueueWriteBuffer(config->_cl_queue, config->d_p_cuboid, CL_FALSE, 0, buffer_size, ((grid_model_vector_t*)p)->cuboid[0][0], 0, NULL, NULL);
-	/* copy y to device */
-	clEnqueueWriteBuffer(config->_cl_queue, config->d_y, CL_FALSE, 0, buffer_size, y, 0, NULL, NULL);
+	/* switching between config->d_y and config->d_temp */
+	config->last_io_buf = !config->last_io_buf;
+	/* copy y to device, only if its pointer location changes */
+	if ( y != config->last_h_y)
+	{
+		clEnqueueWriteBuffer(config->_cl_queue, config->d_y, CL_FALSE, 0, buffer_size, y, 0, NULL, NULL);
+		config->last_h_y = y;
+		/* reseting to the initial state */
+		config->last_io_buf = 0;
+	}
+
+	if (config->last_io_buf) {
+		d_input = &config->d_ytemp;
+		d_output = &config->d_y;
+	}
+	else {
+		d_input = &config->d_y;
+		d_output = &config->d_ytemp;
+	}
 
 	/* evaluate the slope k1 at the beginning */
 	// slope_fn_grid_gpu_kernel(config, model, y, p, k1);
@@ -548,7 +570,7 @@ double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, dou
 	gpu_print_array(config, config->d_y, DEBUG_POS, 1, "y:\t");
 	gpu_print_array(config, config->d_p_cuboid, DEBUG_POS, 1, "cuboid:\t");
 	// clEnqueueReadBuffer(config->_cl_queue, config->d_y, CL_TRUE, 0, buffer_size, input, 0, NULL, NULL);
-	slope_fn_grid_gpu_kernel(config, model, &config->d_y, p, &config->d_k1);
+	slope_fn_grid_gpu_kernel(config, model, d_input, p, &config->d_k1);
 	// slope_fn_grid_gpu(config, model, input, p, output);
 	// clEnqueueWriteBuffer(config->_cl_queue, config->d_k1, CL_TRUE, 0, buffer_size, output, 0, NULL, NULL);
 	//sleep(1);
@@ -560,12 +582,12 @@ double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, dou
 		DEBUG_Flush(config->_cl_queue);
 		/* try RK4 once with normal step size	*/
 		// rk4_core_gpu_kernel(config, model, y, k1, p, n, (*h), ytemp, NULL, 0);
-		rk4_core_gpu_kernel(config, model, &config->d_y, &config->d_k1, p, n, (*h), &config->d_ytemp, NULL, 0);
+		rk4_core_gpu_kernel(config, model, d_input, &config->d_k1, p, n, (*h), d_output, NULL, 0);
 		gpu_print_array(config, config->d_ytemp, DEBUG_POS, 1, "ytemp:\t");
 		DEBUG_Flush(config->_cl_queue);
 		/* repeat it with two half-steps	*/
 		// rk4_core_gpu_kernel(config, model, y, k1, p, n, (*h)/2.0, t1, NULL, 0);
-		rk4_core_gpu_kernel(config, model, &config->d_y, &config->d_k1, p, n, (*h)/2.0, &config->d_t1, NULL, 0);
+		rk4_core_gpu_kernel(config, model, d_input, &config->d_k1, p, n, (*h)/2.0, &config->d_t1, NULL, 0);
 		gpu_print_array(config, config->d_t1, DEBUG_POS, 1, "t1:\t");
 		DEBUG_Flush(config->_cl_queue);
 		/* y after 1st half-step is in t1. re-evaluate k1 for this	*/
@@ -578,7 +600,7 @@ double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, dou
 		DEBUG_Flush(config->_cl_queue);
 		/* get output of the second half-step in t2	*/	
 		// rk4_core_gpu_kernel(config, model, t1, k1, p, n, (*h)/2.0, t2, ytemp, 1);
-		rk4_core_gpu_kernel(config, model, &config->d_t1, &config->d_k1, p, n, (*h)/2.0, &config->d_dv, &config->d_ytemp, 1);
+		rk4_core_gpu_kernel(config, model, &config->d_t1, &config->d_k1, p, n, (*h)/2.0, &config->d_dv, d_output, 1);
 		gpu_print_array(config, config->d_dv, 0, 1, "dv:\t");
 		DEBUG_Flush(config->_cl_queue);
 		/* find the max diff between these two results:
@@ -616,7 +638,7 @@ double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, dou
 
 	/* commit ytemp to yout	*/
 	// copy_dvector(yout, ytemp, n);
-	clEnqueueReadBuffer(config->_cl_queue, config->d_ytemp, CL_TRUE, 0, buffer_size, yout, 0, NULL, NULL);
+	clEnqueueReadBuffer(config->_cl_queue, *d_output, CL_TRUE, 0, buffer_size, yout, 0, NULL, NULL);
 
 	/* return the step-size	*/
 	// free_dvector(input);

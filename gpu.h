@@ -18,7 +18,7 @@ typedef double real;
 
 #include "gpu_rk4.h"
 
-#define FLUSH_DEBUG
+// #define FLUSH_DEBUG
 // #define GPU_DEBUG_PRINT
 #define ENABLE_TIMER	1
 
@@ -90,6 +90,8 @@ typedef struct gpu_config_t_st
 #endif
 
 	FILE* cpu_dma;
+	void* last_h_y;
+	int last_io_buf;
 		
 }gpu_config_t;
 
