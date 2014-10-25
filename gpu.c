@@ -3,6 +3,7 @@
 #include <string.h>
 #include <math.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <time.h>
 
 #include "temperature_grid.h"
@@ -471,15 +472,17 @@ void gpu_init(gpu_config_t *config, grid_model_t *model)
 	gpu_check_error(err, "Couldn't setup a OpenCL kernel argument for max_reduce()");
 	
 	printf("OpenCL initialized.\n");
-	config->cpu_dma = fopen("/dev/cpu_dma_latency", "w");
-	if (config->cpu_dma != NULL) {
+#if CPU_C_STATE_CONTROL > 0
+	config->cpu_dma = open("/dev/cpu_dma_latency", O_WRONLY);
+	if (config->cpu_dma > 0) {
 		int32_t target = 0;
-		fwrite(&target, sizeof(target), 1, config->cpu_dma);
+		write(config->cpu_dma, &target, sizeof(target));
 		printf("CPU C-states disabled.\n");
 	}
 	else {
 		printf("Can't disable C-states. Do you have write permission to /dev/cpu_dma_latency?\n");
 	}
+#endif
 	free(devices);
 #if ENABLE_TIMER > 0
 	clock_gettime(CLOCK_MONOTONIC, &config->time_start);
@@ -516,9 +519,11 @@ void gpu_destroy(gpu_config_t *config)
 	clReleaseContext(config->_cl_context);
 	config->gpu_enabled = 0; // prevents pinned memory allocation for steady state calculation
 	puts("OpenCL environment has been cleaned up.\n");
-	if (config->cpu_dma != NULL) {
-		fclose(config->cpu_dma);
+#if CPU_C_STATE_CONTROL > 0
+	if (config->cpu_dma > 0) {
+		close(config->cpu_dma);
 	}
+#endif
 }
 
 /* 

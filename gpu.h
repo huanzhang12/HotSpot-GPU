@@ -21,6 +21,7 @@ typedef double real;
 // #define FLUSH_DEBUG
 // #define GPU_DEBUG_PRINT
 #define ENABLE_TIMER	1
+// #define CPU_C_STATE_CONTROL	1
 
 #ifdef FLUSH_DEBUG
 #define DEBUG_Flush(queue) clFlush(queue)
@@ -89,7 +90,9 @@ typedef struct gpu_config_t_st
 	struct timespec time_end;
 #endif
 
-	FILE* cpu_dma;
+#if CPU_C_STATE_CONTROL > 0
+	int cpu_dma;
+#endif
 	void* last_h_y;
 	int last_io_buf;
 		

@@ -357,14 +357,6 @@ int main(int argc, char **argv)
 		dump_str_pairs(table, size, global_config.dump_config, "-");
 	}
 
-#if GPGPU > 0
-	/* GPGPU parameters */
-	gpu_config_t gpu_config;
-	/* get defaults */
-	gpu_config = default_gpu_config();
-	/* modify according to command line / config file	*/
-	gpu_config_from_strs(&gpu_config, table, size);
-#endif
 
 	/* initialization: the flp_file global configuration 
 	 * parameter is overridden by the layer configuration 
@@ -378,6 +370,20 @@ int main(int argc, char **argv)
 	
 	if (do_transient)
 		populate_C_model(model, flp);
+
+#if GPGPU > 0
+	/* GPGPU parameters */
+	gpu_config_t gpu_config;
+	/* get defaults */
+	gpu_config = default_gpu_config();
+	/* modify according to command line / config file	*/
+	gpu_config_from_strs(&gpu_config, table, size);
+	if (model->type == BLOCK_MODEL && gpu_config.gpu_enabled)
+	{
+		fprintf(stderr, "GPU acceleration for block model has not been implemented yet. Disabling GPU.\n");
+		gpu_config.gpu_enabled = 0;
+	}
+#endif
 
 	#if VERBOSE > 2
 	debug_print_model(model);
@@ -425,7 +431,7 @@ int main(int argc, char **argv)
 		fatal("no. of units in floorplan and trace file differ\n");
 
 #if GPGPU > 0
-	/* initialize GPU */
+	/* initialize GPU (only when we are using the grid model, otherwise it is forced disabled) */
 	gpu_init(&gpu_config, model->grid);
 #endif
 
