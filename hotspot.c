@@ -431,8 +431,9 @@ int main(int argc, char **argv)
 		fatal("no. of units in floorplan and trace file differ\n");
 
 #if GPGPU > 0
-	/* initialize GPU (only when we are using the grid model, otherwise it is forced disabled) */
-	gpu_init(&gpu_config, model->grid);
+	/* initialize GPU (only when we are using the grid model and transient simulation, otherwise it is forced disabled) */
+	if (do_transient)
+		gpu_init(&gpu_config, model->grid);
 #endif
 
 	/* header line of temperature trace	*/
@@ -526,59 +527,62 @@ int main(int argc, char **argv)
 		fatal("no power numbers in trace file\n");
 
 #if GPGPU > 0
-	gpu_destroy(&gpu_config);
+	if (do_transient)
+		gpu_destroy(&gpu_config);
 #endif
+	/* compute steady state temperature only when an steady temperature output file is given, or we are not doing transient simulation */
+	if (strcmp(model->config->steady_file, NULLFILE) || !do_transient) {
+		/* for computing average	*/
+		if (model->type == BLOCK_MODEL)
+			for(i=0; i < n; i++) {
+				overall_power[i] /= lines;
+				//overall_power[i] /=150; //reduce input power for natural convection
+				total_power += overall_power[i];
+			}
+		else
+			for(i=0, base=0; i < model->grid->n_layers; i++) {
+				if(model->grid->layers[i].has_power)
+					for(j=0; j < model->grid->layers[i].flp->n_units; j++) {
+						overall_power[base+j] /= lines;
+						total_power += overall_power[base+j];
+					}
+				base += model->grid->layers[i].flp->n_units;
+			}
 
-	/* for computing average	*/
-	if (model->type == BLOCK_MODEL)
-		for(i=0; i < n; i++) {
-			overall_power[i] /= lines;
-			//overall_power[i] /=150; //reduce input power for natural convection
-			total_power += overall_power[i];
-		}
-	else
-		for(i=0, base=0; i < model->grid->n_layers; i++) {
-			if(model->grid->layers[i].has_power)
-				for(j=0; j < model->grid->layers[i].flp->n_units; j++) {
-					overall_power[base+j] /= lines;
-					total_power += overall_power[base+j];
-				}
-			base += model->grid->layers[i].flp->n_units;	
-		}
-		
-	/* natural convection r_convec iteration, for steady-state only */ 		
-	natural_convergence = 0;
-	if (natural) { /* natural convection is used */
-		while (!natural_convergence) {
-			r_convec_old = model->config->r_convec;
+		/* natural convection r_convec iteration, for steady-state only */
+		natural_convergence = 0;
+		if (natural) { /* natural convection is used */
+			while (!natural_convergence) {
+				r_convec_old = model->config->r_convec;
+				/* steady state temperature	*/
+				steady_state_temp(model, overall_power, steady_temp);
+				avg_sink_temp = calc_sink_temp(model, steady_temp) + SMALL_FOR_CONVEC;
+				natural = package_model(model->config, table, size, avg_sink_temp);
+				populate_R_model(model, flp);
+				if (avg_sink_temp > MAX_SINK_TEMP)
+					fatal("too high power for a natural convection package -- possible thermal runaway\n");
+				if (fabs(model->config->r_convec-r_convec_old)<NATURAL_CONVEC_TOL)
+					natural_convergence = 1;
+			}
+		}	else /* natural convection is not used, no need for iterations */
 			/* steady state temperature	*/
 			steady_state_temp(model, overall_power, steady_temp);
-			avg_sink_temp = calc_sink_temp(model, steady_temp) + SMALL_FOR_CONVEC;
-			natural = package_model(model->config, table, size, avg_sink_temp);
-			populate_R_model(model, flp);
-			if (avg_sink_temp > MAX_SINK_TEMP)
-				fatal("too high power for a natural convection package -- possible thermal runaway\n");
-			if (fabs(model->config->r_convec-r_convec_old)<NATURAL_CONVEC_TOL) 
-				natural_convergence = 1;
-		}
-	}	else /* natural convection is not used, no need for iterations */
-	/* steady state temperature	*/
-	steady_state_temp(model, overall_power, steady_temp);
 
-	/* print steady state results	*/
-	fprintf(stdout, "Unit\tSteady(Kelvin)\n");
-	dump_temp(model, steady_temp, "stdout");
+		/* print steady state results	*/
+		fprintf(stdout, "Unit\tSteady(Kelvin)\n");
+		dump_temp(model, steady_temp, "stdout");
 
-	/* dump steady state temperatures on to file if needed	*/
-	if (strcmp(model->config->steady_file, NULLFILE))
-		dump_temp(model, steady_temp, model->config->steady_file);
+		/* dump steady state temperatures on to file if needed	*/
+		if (strcmp(model->config->steady_file, NULLFILE))
+			dump_temp(model, steady_temp, model->config->steady_file);
 
-	/* for the grid model, optionally dump the most recent 
-	 * steady state temperatures of the grid cells	
-	 */
-	if (model->type == GRID_MODEL &&
-		strcmp(model->config->grid_steady_file, NULLFILE))
-		dump_steady_temp_grid(model->grid, model->config->grid_steady_file);
+		/* for the grid model, optionally dump the most recent
+		 * steady state temperatures of the grid cells
+		 */
+		if (model->type == GRID_MODEL &&
+			strcmp(model->config->grid_steady_file, NULLFILE))
+			dump_steady_temp_grid(model->grid, model->config->grid_steady_file);
+	}
 
 	#if VERBOSE > 2
 	if (model->type == BLOCK_MODEL) {
