@@ -72,8 +72,8 @@ __kernel void rk4_average_with_maxdiff(__global real *y, __global real *k1, __gl
 		if (local_id < i) {
 			local_result[local_id] = max(local_result[local_id], local_result[local_id + i]);
 		}
+		barrier(CLK_LOCAL_MEM_FENCE);
 	}
-	barrier(CLK_LOCAL_MEM_FENCE);
 	yout[get_group_id(0)] = local_result[0];
 }
 
@@ -93,8 +93,8 @@ __kernel void max_reduce(__global real *y, unsigned int n, __local real *local_r
 		if (local_id < i) {
 			local_result[local_id] = max(local_result[local_id], local_result[local_id + i]);
 		}
+		barrier(CLK_LOCAL_MEM_FENCE);
 	}
-	barrier(CLK_LOCAL_MEM_FENCE);
 	y[get_group_id(0)] = local_result[0];
 }
 
