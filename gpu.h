@@ -56,16 +56,13 @@ typedef struct gpu_config_t_st
 	/* memories */
 	cl_mem c_model;
 	cl_mem c_layer;
-	cl_mem h_v;
 	cl_mem h_y;
 	cl_mem h_result;
 	cl_mem h_cuboid;
 	int h_cuboid_reference;
-	void* pinned_h_v;
 	void* pinned_h_y;
 	void* pinned_h_cuboid;
 	void* pinned_h_result;
-	cl_mem d_v;
 	cl_mem d_y, d_ytemp;
 	cl_mem d_dv;
 	cl_mem d_k1, d_k2, d_k3, d_k4;

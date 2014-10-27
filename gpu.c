@@ -16,7 +16,7 @@ unsigned char rk4_cl[] = {
 
 static gpu_config_t* current_gpu_config = NULL;
 
-/* default thermal configuration parameters	*/
+/* default GPU configuration parameters	*/
 gpu_config_t default_gpu_config(void)
 {
 	gpu_config_t config;
@@ -162,9 +162,6 @@ void gpu_create_buffers(gpu_config_t *config, grid_model_t *model)
 
 
 	/* prepare device memory */
-	config->d_v = clCreateBuffer(config->_cl_context, CL_MEM_READ_WRITE, config->vector_size, NULL, &err);
-	err |= clEnqueueFillBuffer(config->_cl_queue, config->d_v, &pattern, element_size, 0, config->vector_size, 0, NULL, NULL);
-	gpu_check_error(err, "clCreateBuffer() for d_v failed.");
 	config->d_dv = clCreateBuffer(config->_cl_context, CL_MEM_READ_WRITE, config->vector_size, NULL, &err);
 	err |= clEnqueueFillBuffer(config->_cl_queue, config->d_dv, &pattern, element_size, 0, config->vector_size, 0, NULL, NULL);
 	gpu_check_error(err, "clCreateBuffer() for d_dv failed.");
@@ -287,7 +284,6 @@ void gpu_free_cuboid_static(void* cuboid)
 
 void gpu_delete_buffers(gpu_config_t *config)
 {
-	clReleaseMemObject(config->d_v);
 	clReleaseMemObject(config->d_dv);
 	clReleaseMemObject(config->d_y);
 	clReleaseMemObject(config->d_ytemp);
@@ -433,7 +429,7 @@ void gpu_init(gpu_config_t *config, grid_model_t *model)
 	/* Create kernel arguments */
 	err  = clSetKernelArg(config->_cl_kernel_rk4, GRID_CONST_MODEL, sizeof(cl_mem), &config->d_c_model);
 	err |= clSetKernelArg(config->_cl_kernel_rk4, GRID_CONST_LAYER, sizeof(cl_mem), &config->d_c_layer);
-	err |= clSetKernelArg(config->_cl_kernel_rk4, GRID_IO_V, sizeof(cl_mem), &config->d_v);
+	// err |= clSetKernelArg(config->_cl_kernel_rk4, GRID_IO_V, sizeof(cl_mem), &config->d_v);
 	err |= clSetKernelArg(config->_cl_kernel_rk4, GRID_OUT_DV, sizeof(cl_mem), &config->d_dv);
 	err |= clSetKernelArg(config->_cl_kernel_rk4, GRID_NL, sizeof(model->n_layers), &model->n_layers);
 	err |= clSetKernelArg(config->_cl_kernel_rk4, GRID_NR, sizeof(model->rows), &model->rows);
@@ -507,7 +503,6 @@ void gpu_destroy(gpu_config_t *config)
 	free(config->layer);
 	gpu_delete_buffers(config);
 
-	// TODO
 	clFinish(config->_cl_queue);
 	clReleaseKernel(config->_cl_kernel_rk4);
 	clReleaseKernel(config->_cl_kernel_average);
@@ -547,7 +542,7 @@ double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, dou
 	// printf("buffer_size = %zu, n = %d\n", buffer_size, n);
 	// printf("y = %p, yout = %p, p->cuboid = %p\n", y, yout, ((grid_model_vector_t*)p)->cuboid[0][0]);
 	/* copy p->cuboid to device */
-	/* if cuboid is single precision, it will be intialized as single precision from the caller */
+	/* if cuboid is single precision, it will be initialized as single precision from the caller */
 	clEnqueueWriteBuffer(config->_cl_queue, config->d_p_cuboid, CL_FALSE, 0, buffer_size, ((grid_model_vector_t*)p)->cuboid[0][0], 0, NULL, NULL);
 	/* switching between config->d_y and config->d_temp */
 	config->last_io_buf = !config->last_io_buf;
@@ -570,55 +565,28 @@ double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, dou
 	}
 
 	/* evaluate the slope k1 at the beginning */
-	// slope_fn_grid_gpu_kernel(config, model, y, p, k1);
 	DEBUG_Flush(config->_cl_queue);
-	gpu_print_array(config, config->d_y, DEBUG_POS, 1, "y:\t");
-	gpu_print_array(config, config->d_p_cuboid, DEBUG_POS, 1, "cuboid:\t");
 	// clEnqueueReadBuffer(config->_cl_queue, config->d_y, CL_TRUE, 0, buffer_size, input, 0, NULL, NULL);
 	slope_fn_grid_gpu_kernel(config, model, d_input, p, &config->d_k1);
-	// slope_fn_grid_gpu(config, model, input, p, output);
-	// clEnqueueWriteBuffer(config->_cl_queue, config->d_k1, CL_TRUE, 0, buffer_size, output, 0, NULL, NULL);
-	//sleep(1);
-	//printf("First kernel done.\n");
-	gpu_print_array(config, config->d_k1, DEBUG_POS, 1, "k1:\t");
 	/* try until accuracy is achieved	*/
 	do {
 		(*h) = new_h;
 		DEBUG_Flush(config->_cl_queue);
 		/* try RK4 once with normal step size	*/
-		// rk4_core_gpu_kernel(config, model, y, k1, p, n, (*h), ytemp, NULL, 0);
 		rk4_core_gpu_kernel(config, model, d_input, &config->d_k1, p, n, (*h), d_output, NULL, 0);
-		gpu_print_array(config, config->d_ytemp, DEBUG_POS, 1, "ytemp:\t");
 		DEBUG_Flush(config->_cl_queue);
 		/* repeat it with two half-steps	*/
-		// rk4_core_gpu_kernel(config, model, y, k1, p, n, (*h)/2.0, t1, NULL, 0);
 		rk4_core_gpu_kernel(config, model, d_input, &config->d_k1, p, n, (*h)/2.0, &config->d_t1, NULL, 0);
-		gpu_print_array(config, config->d_t1, DEBUG_POS, 1, "t1:\t");
 		DEBUG_Flush(config->_cl_queue);
 		/* y after 1st half-step is in t1. re-evaluate k1 for this	*/
-		// slope_fn_grid_gpu_kernel(config, model, t1, p, k1);
-		// clEnqueueReadBuffer(config->_cl_queue, config->d_t1, CL_TRUE, 0, buffer_size, input, 0, NULL, NULL);
-		// slope_fn_grid_gpu(config, model, input, p, output);
-		// clEnqueueWriteBuffer(config->_cl_queue, config->d_k1, CL_TRUE, 0, buffer_size, output, 0, NULL, NULL);
 		slope_fn_grid_gpu_kernel(config, model, &config->d_t1, p, &config->d_k1);
-		gpu_print_array(config, config->d_k1, DEBUG_POS, 1, "k1:\t");
 		DEBUG_Flush(config->_cl_queue);
 		/* get output of the second half-step in t2	*/	
-		// rk4_core_gpu_kernel(config, model, t1, k1, p, n, (*h)/2.0, t2, ytemp, 1);
 		rk4_core_gpu_kernel(config, model, &config->d_t1, &config->d_k1, p, n, (*h)/2.0, &config->d_dv, d_output, 1);
-		gpu_print_array(config, config->d_dv, 0, 1, "dv:\t");
 		DEBUG_Flush(config->_cl_queue);
 		/* find the max diff between these two results:
 		 * use t1 to store the diff
 		 */
-		/*
-		for(i=0; i < n; i++)
-			t1[i] = fabs(ytemp[i] - t2[i]);
-		max = t1[0];
-		for(i=1; i < n; i++)
-			if (max < t1[i])
-				max = t1[i];
-		*/
 		clEnqueueReadBuffer(config->_cl_queue, config->d_dv, CL_TRUE, 0, config->element_size, config->pinned_h_result, 0, NULL, NULL);
 		max = ((real*)config->pinned_h_result)[0]; // TODO: support single precision
 
@@ -642,12 +610,9 @@ double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, dou
 	} while (new_h < (*h));
 
 	/* commit ytemp to yout	*/
-	// copy_dvector(yout, ytemp, n);
 	clEnqueueReadBuffer(config->_cl_queue, *d_output, CL_TRUE, 0, buffer_size, yout, 0, NULL, NULL);
 
 	/* return the step-size	*/
-	// free_dvector(input);
-	// free_dvector(output);
 	return new_h;
 }
 
@@ -660,65 +625,6 @@ double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, dou
  * Recipes in C", Chapter 16, from 
  * http://www.nrbook.com/a/bookcpdf/c16-1.pdf
  */
-void rk4_core_gpu(gpu_config_t *config, void *model, double *y, double *k1, void *p, int n, double h, double *yout)
-{
-	int i;
-	double *t, *k2, *k3, *k4;
-	double h_real;
-	k2 = dvector(n);
-	k3 = dvector(n);
-	k4 = dvector(n);
-	t = dvector(n);
-
-	/* k2 is the slope at the trial midpoint (t) found using 
-	 * slope k1 (which is at the starting point).
-	 */
-	/* t = y + h/2 * k1 (t = y; t += h/2 * k1) */
-	for(i=0; i < n; i++)
-		t[i] = y[i] + h/2.0 * k1[i];
-	
-	/* k2 = slope at t */
-	slope_fn_grid_gpu(config, model, t, p, k2);
-
-	/* k3 is the slope at the trial midpoint (t) found using
-	 * slope k2 found above.
-	 */
-	/* t =  y + h/2 * k2 (t = y; t += h/2 * k2) */
-	for(i=0; i < n; i++)
-		t[i] = y[i] + h/2.0 * k2[i];
-	/* k3 = slope at t */
-	slope_fn_grid_gpu(config, model, t, p, k3);
-
-	/* k4 is the slope at trial endpoint (t) found using
-	 * slope k3 found above.
-	 */
-	/* t =  y + h * k3 (t = y; t += h * k3) */
-	for(i=0; i < n; i++)
-		t[i] = y[i] + h * k3[i];
-
-	/* k4 = slope at t */
-	slope_fn_grid_gpu(config, model, t, p, k4);
-	/*
-	clEnqueueWriteBuffer(config->_cl_queue, config->d_y, CL_FALSE, 0, config->vector_size, y, 0, NULL, NULL);
-	clEnqueueWriteBuffer(config->_cl_queue, config->d_k1, CL_FALSE, 0, config->vector_size, k1, 0, NULL, NULL);
-	clEnqueueWriteBuffer(config->_cl_queue, config->d_k2, CL_FALSE, 0, config->vector_size, k2, 0, NULL, NULL);
-	clEnqueueWriteBuffer(config->_cl_queue, config->d_k3, CL_FALSE, 0, config->vector_size, k3, 0, NULL, NULL);
-	clEnqueueWriteBuffer(config->_cl_queue, config->d_k4, CL_FALSE, 0, config->vector_size, k4, 0, NULL, NULL);
-	clSetKernelArg(config->_cl_kernel_average, 5, sizeof(h), &h);
-	clEnqueueNDRangeKernel(config->_cl_queue, config->_cl_kernel_average, 2, NULL, config->global_work_size, config->local_work_size, 0, NULL, NULL);
-	clEnqueueReadBuffer(config->_cl_queue, config->d_dv, CL_TRUE, 0, config->vector_size, yout, 0, NULL, NULL);
-	*/
-
-	/* yout = y + h*(k1/6 + k2/3 + k3/3 + k4/6)	*/
-	for (i =0; i < n; i++) 
-		yout[i] = y[i] + h * (k1[i] + 2*k2[i] + 2*k3[i] + k4[i])/6.0;
-
-	free_dvector(k2);
-	free_dvector(k3);
-	free_dvector(k4);
-	free_dvector(t);
-}
-
 void rk4_core_gpu_kernel(gpu_config_t *config, void *model, cl_mem *d_y, cl_mem *d_k1, void *p, int n, real h, cl_mem *d_yout, cl_mem *d_ytemp, int do_maxdiff)
 {
 	int i;
@@ -728,11 +634,8 @@ void rk4_core_gpu_kernel(gpu_config_t *config, void *model, cl_mem *d_y, cl_mem 
 	 * slope k1 (which is at the starting point).
 	 */
 	/* t = y + h/2 * k1 (t = y; t += h/2 * k1) */
-	// for(i=0; i < n; i++)
-	//	t[i] = y[i] + h/2.0 * k1[i];
 
 	/* k2 = slope at t */
-	// slope_fn_grid_gpu_kernel(config, model, t, p, k2);
 	h_real = h / 2.0;
 	/* inputs */
 	err = clSetKernelArg(config->_cl_kernel_rk4, GRID_IN_Y, sizeof(cl_mem), d_y);
@@ -745,33 +648,25 @@ void rk4_core_gpu_kernel(gpu_config_t *config, void *model, cl_mem *d_y, cl_mem 
 	gpu_check_error(err, "Couldn't setup a OpenCL kernel argument in rk4_core_gpu_kernel()");
 	err = clEnqueueNDRangeKernel(config->_cl_queue, config->_cl_kernel_rk4, 2, NULL, config->global_work_size, config->local_work_size, 0, NULL, NULL);
 	gpu_check_error(err, "Cannot launch kernel rk4_core_gpu_kernel()!");
-	gpu_print_array(config, config->d_k2, DEBUG_POS, 1, "core:k2:\t");
 	/* k3 is the slope at the trial midpoint (t) found using
 	 * slope k2 found above.
 	 */
 	/* t =  y + h/2 * k2 (t = y; t += h/2 * k2) */
-	// for(i=0; i < n; i++)
-	//	t[i] = y[i] + h/2.0 * k2[i];
 
 	/* k3 = slope at t */
-	// slope_fn_grid_gpu_kernel(config, model, t, p, k3);
 	/* h is not changed, d_k2 is the output of the previous kernel */
 	err = clSetKernelArg(config->_cl_kernel_rk4, GRID_IN_K, sizeof(cl_mem), &config->d_k2);
-	// output to d_k3
+	/* output to d_k3 */
 	err |= clSetKernelArg(config->_cl_kernel_rk4, GRID_OUT_DV, sizeof(cl_mem), &config->d_k3);
 	gpu_check_error(err, "Couldn't setup a OpenCL kernel argument in rk4_core_gpu_kernel()");
 	err = clEnqueueNDRangeKernel(config->_cl_queue, config->_cl_kernel_rk4, 2, NULL, config->global_work_size, config->local_work_size, 0, NULL, NULL);
 	gpu_check_error(err, "Cannot launch kernel rk4_core_gpu_kernel()!");
-	gpu_print_array(config, config->d_k3, DEBUG_POS, 1, "core:k3:\t");
 	/* k4 is the slope at trial endpoint (t) found using
 	 * slope k3 found above.
 	 */
 	/* t =  y + h * k3 (t = y; t += h * k3) */
-	// for(i=0; i < n; i++)
-	//	t[i] = y[i] + h * k3[i];
 
 	/* k4 = slope at t */
-	// slope_fn_grid_gpu_kernel(config, model, t, p, k4);
 	/* inputs */
 	h_real = h;
 	err = clSetKernelArg(config->_cl_kernel_rk4, GRID_H, sizeof(h_real), &h_real);
@@ -781,10 +676,7 @@ void rk4_core_gpu_kernel(gpu_config_t *config, void *model, cl_mem *d_y, cl_mem 
 	gpu_check_error(err, "Couldn't setup a OpenCL kernel argument in rk4_core_gpu_kernel()");
 	err = clEnqueueNDRangeKernel(config->_cl_queue, config->_cl_kernel_rk4, 2, NULL, config->global_work_size, config->local_work_size, 0, NULL, NULL);
 	gpu_check_error(err, "Cannot launch kernel rk4_core_gpu_kernel()!");
-	gpu_print_array(config, config->d_k4, DEBUG_POS, 1, "core:k4:\t");
 	/* yout = y + h*(k1/6 + k2/3 + k3/3 + k4/6)	*/
-	// for (i =0; i < n; i++)
-	//	yout[i] = y[i] + h * (k1[i] + 2*k2[i] + 2*k3[i] + k4[i])/6.0;
 	if (do_maxdiff) {
 		err = clSetKernelArg(config->_cl_kernel_average_with_maxdiff, AVG_IN_Y, sizeof(cl_mem), d_y);
 		err |= clSetKernelArg(config->_cl_kernel_average_with_maxdiff, AVG_IN_K1, sizeof(cl_mem), d_k1);
@@ -808,17 +700,11 @@ void rk4_core_gpu_kernel(gpu_config_t *config, void *model, cl_mem *d_y, cl_mem 
 		err |= clSetKernelArg(config->_cl_kernel_average, AVG_IN_K1, sizeof(cl_mem), d_k1);
 		err |= clSetKernelArg(config->_cl_kernel_average, AVG_H, sizeof(h_real), &h_real);
 		err |= clSetKernelArg(config->_cl_kernel_average, AVG_OUT_YOUT, sizeof(cl_mem), d_yout);
-		gpu_print_array(config, *d_y, DEBUG_POS, 1, "core:y:\t");
-		gpu_print_array(config, *d_k1, DEBUG_POS, 1, "core:k1:\t");
-		gpu_print_array(config, config->d_k2, DEBUG_POS, 1, "core:k2:\t");
-		gpu_print_array(config, config->d_k3, DEBUG_POS, 1, "core:k3:\t");
-		gpu_print_array(config, config->d_k4, DEBUG_POS, 1, "core:k4:\t");
 		gpu_check_error(err, "Couldn't setup a OpenCL kernel argument in rk4_average()");
 		size_t avg_kernel_global_size = config->global_work_size[0] * config->global_work_size[1];
 		size_t avg_kernel_local_size = config->local_work_size[0] * config->local_work_size[1];
 		err = clEnqueueNDRangeKernel(config->_cl_queue, config->_cl_kernel_average, 1, NULL, &avg_kernel_global_size, &avg_kernel_local_size, 0, NULL, NULL);
 		gpu_check_error(err, "Cannot launch kernel rk4_average()!");
-		gpu_print_array(config, *d_yout, DEBUG_POS, 1, "core:yout:\t");
 	}
 }
 
@@ -836,470 +722,4 @@ void slope_fn_grid_gpu_kernel(gpu_config_t *config, grid_model_t *model, cl_mem 
 	gpu_check_error(err, "Couldn't setup a OpenCL kernel argument in rk4_core_gpu_kernel()");
 	err = clEnqueueNDRangeKernel(config->_cl_queue, config->_cl_kernel_rk4, 2, NULL, config->global_work_size, config->local_work_size, 0, NULL, NULL);
 	gpu_check_error(err, "Cannot launch kernel slope_fn_grid_gpu()!");
-	// slope_fn_grid_gpu(config, model, v, p, dv);
 }
-
-/* function to access a 1-d array as a 3-d matrix	*/
-#define A3D(array,n,i,j,nl,nr,nc)		(array[(n)*(nr)*(nc) + (i)*(nc) + (j)])
-/* macros for calculating currents(power values)	*/
-/* current(power) from the next cell north. zero if on northern boundary	*/
-# define NP(l,v,n,i,j,nl,nr,nc)		((i > 0) ? ((A3D(v,n,i-1,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].ry) : 0.0)
-/* current(power) from the next cell south. zero if on southern boundary	*/
-# define SP(l,v,n,i,j,nl,nr,nc)		((i < nr-1) ? ((A3D(v,n,i+1,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].ry) : 0.0)
-/* current(power) from the next cell east. zero if on eastern boundary	*/
-# define EP(l,v,n,i,j,nl,nr,nc)		((j < nc-1) ? ((A3D(v,n,i,j+1,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].rx) : 0.0)
-/* current(power) from the next cell west. zero if on western boundary	*/
-# define WP(l,v,n,i,j,nl,nr,nc)		((j > 0) ? ((A3D(v,n,i,j-1,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].rx) : 0.0)
-/* current(power) from the next cell below. zero if on bottom face		*/
-# define BP(l,v,n,i,j,nl,nr,nc)		((n < nl-1) ? ((A3D(v,n+1,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].rz) : 0.0)
-/* current(power) from the next cell above. zero if on top face			*/
-# define AP(l,v,n,i,j,nl,nr,nc)		((n > 0) ? ((A3D(v,n-1,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n-1].rz) : 0.0)
-
-/* compute the slope vector for the grid cells. the transient
- * equation is CdV + sum{(T - Ti)/Ri} = P 
- * so, slope = dV = [P + sum{(Ti-T)/Ri}]/C
- */
-void slope_fn_grid_gpu(gpu_config_t *config, grid_model_t *model, double *v, grid_model_vector_t *p, double *dv)
-{
-	int n, i, j;
-	/* sum of the currents(power values)	*/
-	double psum;
-	
-	/* shortcuts for cell width(cw) and cell height(ch)	*/
-	double cw = model->width / model->cols;
-	double ch = model->height / model->rows;
-
-	/* shortcuts	*/
-	thermal_config_t *c = &model->config;
-	layer_t *l = model->layers;
-	int nl = model->n_layers;
-	int nr = model->rows;
-	int nc = model->cols;
-	int spidx, hsidx, metalidx, c4idx, subidx, solderidx, pcbidx;
-	int model_secondary = model->config.model_secondary;
-	
-	/* pointer to the starting address of the extra nodes	*/
-	double *x = v + nl*nr*nc;
-	
-	if (!model->config.model_secondary) {
-		spidx = nl - DEFAULT_PACK_LAYERS + LAYER_SP;
-		hsidx = nl - DEFAULT_PACK_LAYERS + LAYER_SINK;
-	} else {
-		spidx = nl - DEFAULT_PACK_LAYERS - SEC_PACK_LAYERS + LAYER_SP;
-		hsidx = nl - DEFAULT_PACK_LAYERS - SEC_PACK_LAYERS + LAYER_SINK;
-		metalidx = nl - DEFAULT_PACK_LAYERS - SEC_PACK_LAYERS - SEC_CHIP_LAYERS + LAYER_METAL;
-		c4idx = nl - DEFAULT_PACK_LAYERS - SEC_PACK_LAYERS - SEC_CHIP_LAYERS + LAYER_C4;
-		subidx = nl - SEC_PACK_LAYERS + LAYER_SUB;
-		solderidx = nl - SEC_PACK_LAYERS + LAYER_SOLDER;
-		pcbidx = nl - SEC_PACK_LAYERS + LAYER_PCB;		
-	}
-	
-	/* for each grid cell	*/
-	for(n=0; n < nl; n++)
-		for(i=0; i < nr; i++)
-			for(j=0; j < nc; j++) {
-				if (n==LAYER_SI && model_secondary) { //top silicon layer
-					psum = NP(l,v,n,i,j,nl,nr,nc) + SP(l,v,n,i,j,nl,nr,nc) + 
-					   EP(l,v,n,i,j,nl,nr,nc) + WP(l,v,n,i,j,nl,nr,nc) + 
-					   ((A3D(v,metalidx,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[metalidx].rz) +
-					   ((A3D(v,n+1,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].rz);
-				} else if (n==spidx && model_secondary) { //spreader layer
-					psum = NP(l,v,n,i,j,nl,nr,nc) + SP(l,v,n,i,j,nl,nr,nc) + 
-					   EP(l,v,n,i,j,nl,nr,nc) + WP(l,v,n,i,j,nl,nr,nc) + 
-					   ((A3D(v,metalidx-1,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[metalidx-1].rz) +
-					   ((A3D(v,hsidx,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].rz);
-				} else if (n==metalidx && model_secondary) { //metal layer
-					psum = NP(l,v,n,i,j,nl,nr,nc) + SP(l,v,n,i,j,nl,nr,nc) + 
-					   EP(l,v,n,i,j,nl,nr,nc) + WP(l,v,n,i,j,nl,nr,nc) + 
-					   ((A3D(v,c4idx,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[c4idx].rz) +
-					   ((A3D(v,LAYER_SI,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].rz);
-				} else if (n==metalidx-1 && model_secondary) { // TIM layer
-					psum = NP(l,v,n,i,j,nl,nr,nc) + SP(l,v,n,i,j,nl,nr,nc) + 
-					   EP(l,v,n,i,j,nl,nr,nc) + WP(l,v,n,i,j,nl,nr,nc) + 
-					   ((A3D(v,metalidx-2,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[metalidx-2].rz) +
-					   ((A3D(v,spidx,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].rz);
-				} else if (n==c4idx && model_secondary) { //C4 layer
-					psum = NP(l,v,n,i,j,nl,nr,nc) + SP(l,v,n,i,j,nl,nr,nc) + 
-					   EP(l,v,n,i,j,nl,nr,nc) + WP(l,v,n,i,j,nl,nr,nc) + 
-					   ((A3D(v,subidx,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[subidx].rz) +
-					   ((A3D(v,metalidx,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].rz);
-				} else if (n==subidx && model_secondary) { //Substrate layer
-					psum = NP(l,v,n,i,j,nl,nr,nc) + SP(l,v,n,i,j,nl,nr,nc) + 
-					   EP(l,v,n,i,j,nl,nr,nc) + WP(l,v,n,i,j,nl,nr,nc) + 
-					   ((A3D(v,solderidx,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[solderidx].rz) +
-					   ((A3D(v,c4idx,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].rz);
-				} else if (n==pcbidx && model_secondary) { //PCB layer
-					psum = NP(l,v,n,i,j,nl,nr,nc) + SP(l,v,n,i,j,nl,nr,nc) + 
-					   EP(l,v,n,i,j,nl,nr,nc) + WP(l,v,n,i,j,nl,nr,nc) + 
-					   ((A3D(v,solderidx,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].rz);
-				} else if (n==hsidx && model_secondary) { // heatsink layer
-					psum = NP(l,v,n,i,j,nl,nr,nc) + SP(l,v,n,i,j,nl,nr,nc) + 
-					   EP(l,v,n,i,j,nl,nr,nc) + WP(l,v,n,i,j,nl,nr,nc) + 
-					   ((A3D(v,spidx,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[spidx].rz);
-				} else {
-					/* sum the currents(power values) to cells north, south, 
-				 	* east, west, above and below
-				 	*/
-					psum = NP(l,v,n,i,j,nl,nr,nc) + SP(l,v,n,i,j,nl,nr,nc) + 
-					   EP(l,v,n,i,j,nl,nr,nc) + WP(l,v,n,i,j,nl,nr,nc) + 
-					   AP(l,v,n,i,j,nl,nr,nc) + BP(l,v,n,i,j,nl,nr,nc);
-				}
-
-				/* spreader core is connected to its periphery	*/
-				if (n == spidx) {
-					/* northern boundary - edge cell has half the ry	*/
-					if (i == 0)
-						psum += (x[SP_N] - A3D(v,n,i,j,nl,nr,nc))/(l[n].ry/2.0 + nc*model->pack.r_sp1_y); 
-					/* southern boundary - edge cell has half the ry	*/
-					if (i == nr-1)
-						psum += (x[SP_S] - A3D(v,n,i,j,nl,nr,nc))/(l[n].ry/2.0 + nc*model->pack.r_sp1_y); 
-					/* eastern boundary	 - edge cell has half the rx	*/
-					if (j == nc-1)
-						psum += (x[SP_E] - A3D(v,n,i,j,nl,nr,nc))/(l[n].rx/2.0 + nr*model->pack.r_sp1_x); 
-					/* western boundary	 - edge cell has half the rx	*/
-					if (j == 0)
-						psum += (x[SP_W] - A3D(v,n,i,j,nl,nr,nc))/(l[n].rx/2.0 + nr*model->pack.r_sp1_x); 
-				/* heatsink core is connected to its inner periphery and ambient	*/
-				} else if (n == hsidx) {
-					/* all nodes are connected to the ambient	*/
-					psum += (c->ambient - A3D(v,n,i,j,nl,nr,nc))/l[n].rz;
-					/* northern boundary - edge cell has half the ry	*/
-					if (i == 0)
-						psum += (x[SINK_C_N] - A3D(v,n,i,j,nl,nr,nc))/(l[n].ry/2.0 + nc*model->pack.r_hs1_y); 
-					/* southern boundary - edge cell has half the ry	*/
-					if (i == nr-1)
-						psum += (x[SINK_C_S] - A3D(v,n,i,j,nl,nr,nc))/(l[n].ry/2.0 + nc*model->pack.r_hs1_y); 
-					/* eastern boundary	 - edge cell has half the rx	*/
-					if (j == nc-1)
-						psum += (x[SINK_C_E] - A3D(v,n,i,j,nl,nr,nc))/(l[n].rx/2.0 + nr*model->pack.r_hs1_x); 
-					/* western boundary	 - edge cell has half the rx	*/
-					if (j == 0)
-						psum += (x[SINK_C_W] - A3D(v,n,i,j,nl,nr,nc))/(l[n].rx/2.0 + nr*model->pack.r_hs1_x); 
-				}	else if (n == pcbidx && model->config.model_secondary) {
-					/* all nodes are connected to the ambient	*/
-					psum += (c->ambient - A3D(v,n,i,j,nl,nr,nc))/(model->config.r_convec_sec * 
-								   (model->config.s_pcb * model->config.s_pcb) / (cw * ch));
-					/* northern boundary - edge cell has half the ry	*/
-					if (i == 0)
-						psum += (x[PCB_C_N] - A3D(v,n,i,j,nl,nr,nc))/(l[n].ry/2.0 + nc*model->pack.r_pcb1_y); 
-					/* southern boundary - edge cell has half the ry	*/
-					if (i == nr-1)
-						psum += (x[PCB_C_S] - A3D(v,n,i,j,nl,nr,nc))/(l[n].ry/2.0 + nc*model->pack.r_pcb1_y); 
-					/* eastern boundary	 - edge cell has half the rx	*/
-					if (j == nc-1)
-						psum += (x[PCB_C_E] - A3D(v,n,i,j,nl,nr,nc))/(l[n].rx/2.0 + nr*model->pack.r_pcb1_x); 
-					/* western boundary	 - edge cell has half the rx	*/
-					if (j == 0)
-						psum += (x[PCB_C_W] - A3D(v,n,i,j,nl,nr,nc))/(l[n].rx/2.0 + nr*model->pack.r_pcb1_x); 
-				}	else if (n == subidx && model->config.model_secondary) {
-					/* northern boundary - edge cell has half the ry	*/
-					if (i == 0)
-						psum += (x[SUB_N] - A3D(v,n,i,j,nl,nr,nc))/(l[n].ry/2.0 + nc*model->pack.r_sub1_y); 
-					/* southern boundary - edge cell has half the ry	*/
-					if (i == nr-1)
-						psum += (x[SUB_S] - A3D(v,n,i,j,nl,nr,nc))/(l[n].ry/2.0 + nc*model->pack.r_sub1_y); 
-					/* eastern boundary	 - edge cell has half the rx	*/
-					if (j == nc-1)
-						psum += (x[SUB_E] - A3D(v,n,i,j,nl,nr,nc))/(l[n].rx/2.0 + nr*model->pack.r_sub1_x); 
-					/* western boundary	 - edge cell has half the rx	*/
-					if (j == 0)
-						psum += (x[SUB_W] - A3D(v,n,i,j,nl,nr,nc))/(l[n].rx/2.0 + nr*model->pack.r_sub1_x); 
-				}	else if (n == solderidx && model->config.model_secondary) {
-					/* northern boundary - edge cell has half the ry	*/
-					if (i == 0)
-						psum += (x[SOLDER_N] - A3D(v,n,i,j,nl,nr,nc))/(l[n].ry/2.0 + nc*model->pack.r_solder1_y); 
-					/* southern boundary - edge cell has half the ry	*/
-					if (i == nr-1)
-						psum += (x[SOLDER_S] - A3D(v,n,i,j,nl,nr,nc))/(l[n].ry/2.0 + nc*model->pack.r_solder1_y); 
-					/* eastern boundary	 - edge cell has half the rx	*/
-					if (j == nc-1)
-						psum += (x[SOLDER_E] - A3D(v,n,i,j,nl,nr,nc))/(l[n].rx/2.0 + nr*model->pack.r_solder1_x); 
-					/* western boundary	 - edge cell has half the rx	*/
-					if (j == 0)
-						psum += (x[SOLDER_W] - A3D(v,n,i,j,nl,nr,nc))/(l[n].rx/2.0 + nr*model->pack.r_solder1_x); 
-				}
-
-				/* update the current cell's temperature	*/	   
-				A3D(dv,n,i,j,nl,nr,nc) = (p->cuboid[n][i][j] + psum) / l[n].c;
-			}
-	// slope_fn_pack_gpu_kernel(config, model, v, p, dv);
-	slope_fn_pack_gpu(config, model, v, p, dv);
-}
-
-/* compute the slope vector for the package nodes	*/
-void slope_fn_pack_gpu_kernel(gpu_config_t *config, grid_model_t *model, double *v, grid_model_vector_t *p, double *dv)
-{
-	int err;
-	unsigned int data_offset = (model->n_layers * model->rows * model->cols) * config->element_size;
-	size_t buffer_size = config->vector_size;
-	// prepare a pinned buffer
-	config->h_v = clCreateBuffer(config->_cl_context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, buffer_size, v, &err);
-	gpu_check_error(err, "clCreateBuffer() for h_v failed.");
-
-	// copy pinned *v to device
-	config->pinned_h_v = clEnqueueMapBuffer(config->_cl_queue, config->h_v, CL_TRUE, CL_MAP_READ, 0, buffer_size, 0, NULL, NULL, &err);
-	gpu_check_error(err, "clEnqueueMapBuffer() for pinned_h_v failed.");
-	clEnqueueWriteBuffer(config->_cl_queue, config->d_v, CL_FALSE, 0, buffer_size, config->pinned_h_v, 0, NULL, NULL);
-	clEnqueueUnmapMemObject(config->_cl_queue, config->h_v, config->pinned_h_v, 0, NULL, NULL);
-
-	// launch kernel
-	err = clEnqueueNDRangeKernel(config->_cl_queue, config->_cl_kernel_rk4, 2, NULL, config->global_work_size, config->local_work_size, 0, NULL, NULL);
-	gpu_check_error(err, "Cannot launch kernel!");
-
-	// copy result back
-	config->h_result = clCreateBuffer(config->_cl_context, CL_MEM_WRITE_ONLY | CL_MEM_USE_HOST_PTR, buffer_size, dv, &err);
-	gpu_check_error(err, "clCreateBuffer() for h_result failed.");
-	config->pinned_h_result = clEnqueueMapBuffer(config->_cl_queue, config->h_result, CL_TRUE, CL_MAP_WRITE, 0, buffer_size, 0, NULL, NULL, &err);
-	gpu_check_error(err, "clEnqueueMapBuffer() for pinned_h_result failed.");
-	clEnqueueReadBuffer(config->_cl_queue, config->d_dv, CL_TRUE, data_offset, buffer_size - data_offset, config->pinned_h_result + data_offset, 0, NULL, NULL);
-	// release memory
-	clEnqueueUnmapMemObject(config->_cl_queue, config->h_result, config->pinned_h_result, 0, NULL, NULL);
-	clReleaseMemObject(config->h_v);
-	clReleaseMemObject(config->h_result);
-}
-
-/* compute the slope vector for the package nodes	*/
-void slope_fn_pack_gpu(gpu_config_t *config, grid_model_t *model, double *v, grid_model_vector_t *p, double *dv)
-{
-	int i, j;
-	/* sum of the currents(power values)	*/
-	double psum;
-	
-	/* shortcuts	*/
-	package_RC_t *pk = &model->pack;
-	thermal_config_t *c = &model->config;
-	layer_t *l = model->layers;
-	int nl = model->n_layers;
-	int nr = model->rows;
-	int nc = model->cols;
-	int spidx, hsidx, metalidx, c4idx, subidx, solderidx, pcbidx;
-	
-	/* pointer to the starting address of the extra nodes	*/
-	double *x = v + nl*nr*nc;
-
-	
-	if (!model->config.model_secondary) {
-		spidx = nl - DEFAULT_PACK_LAYERS + LAYER_SP;
-		hsidx = nl - DEFAULT_PACK_LAYERS + LAYER_SINK;
-	} else {
-		spidx = nl - DEFAULT_PACK_LAYERS - SEC_PACK_LAYERS + LAYER_SP;
-		hsidx = nl - DEFAULT_PACK_LAYERS - SEC_PACK_LAYERS + LAYER_SINK;
-		metalidx = nl - DEFAULT_PACK_LAYERS - SEC_PACK_LAYERS - SEC_CHIP_LAYERS + LAYER_METAL;
-		c4idx = nl - DEFAULT_PACK_LAYERS - SEC_PACK_LAYERS - SEC_CHIP_LAYERS + LAYER_C4;
-		subidx = nl - SEC_PACK_LAYERS + LAYER_SUB;
-		solderidx = nl - SEC_PACK_LAYERS + LAYER_SOLDER;
-		pcbidx = nl - SEC_PACK_LAYERS + LAYER_PCB;		
-	}
-	
-
-	/* sink outer north/south	*/
-	psum = (c->ambient - x[SINK_N])/(pk->r_hs_per + pk->r_amb_per) + 
-		   (x[SINK_C_N] - x[SINK_N])/(pk->r_hs2_y + pk->r_hs);
-	dv[nl*nr*nc + SINK_N] = psum / (pk->c_hs_per + pk->c_amb_per);
-	psum = (c->ambient - x[SINK_S])/(pk->r_hs_per + pk->r_amb_per) + 
-		   (x[SINK_C_S] - x[SINK_S])/(pk->r_hs2_y + pk->r_hs);
-	dv[nl*nr*nc + SINK_S] = psum / (pk->c_hs_per + pk->c_amb_per);
-
-	/* sink outer west/east	*/
-	psum = (c->ambient - x[SINK_W])/(pk->r_hs_per + pk->r_amb_per) + 
-		   (x[SINK_C_W] - x[SINK_W])/(pk->r_hs2_x + pk->r_hs);
-	dv[nl*nr*nc + SINK_W] = psum / (pk->c_hs_per + pk->c_amb_per);
-	psum = (c->ambient - x[SINK_E])/(pk->r_hs_per + pk->r_amb_per) + 
-		   (x[SINK_C_E] - x[SINK_E])/(pk->r_hs2_x + pk->r_hs);
-	dv[nl*nr*nc + SINK_E] = psum / (pk->c_hs_per + pk->c_amb_per);
-
-	/* sink inner north/south	*/
-	/* partition r_hs1_y among all the nc grid cells. edge cell has half the ry	*/
-	psum = 0.0;
-	for(j=0; j < nc; j++)
-		psum += (A3D(v,hsidx,0,j,nl,nr,nc) - x[SINK_C_N]);
-	psum /= (l[hsidx].ry / 2.0 + nc * pk->r_hs1_y);
-	psum += (c->ambient - x[SINK_C_N])/(pk->r_hs_c_per_y + pk->r_amb_c_per_y) + 
-			(x[SP_N] - x[SINK_C_N])/pk->r_sp_per_y +
-			(x[SINK_N] - x[SINK_C_N])/(pk->r_hs2_y + pk->r_hs);
-	dv[nl*nr*nc + SINK_C_N] = psum / (pk->c_hs_c_per_y + pk->c_amb_c_per_y);
-
-	psum = 0.0;
-	for(j=0; j < nc; j++)
-		psum += (A3D(v,hsidx,nr-1,j,nl,nr,nc) - x[SINK_C_S]);
-	psum /= (l[hsidx].ry / 2.0 + nc * pk->r_hs1_y);
-	psum += (c->ambient - x[SINK_C_S])/(pk->r_hs_c_per_y + pk->r_amb_c_per_y) + 
-			(x[SP_S] - x[SINK_C_S])/pk->r_sp_per_y +
-			(x[SINK_S] - x[SINK_C_S])/(pk->r_hs2_y + pk->r_hs);
-	dv[nl*nr*nc + SINK_C_S] = psum / (pk->c_hs_c_per_y + pk->c_amb_c_per_y);
-
-	/* sink inner west/east	*/
-	/* partition r_hs1_x among all the nr grid cells. edge cell has half the rx	*/
-	psum = 0.0;
-	for(i=0; i < nr; i++)
-		psum += (A3D(v,hsidx,i,0,nl,nr,nc) - x[SINK_C_W]);
-	psum /= (l[hsidx].rx / 2.0 + nr * pk->r_hs1_x);
-	psum += (c->ambient - x[SINK_C_W])/(pk->r_hs_c_per_x + pk->r_amb_c_per_x) + 
-			(x[SP_W] - x[SINK_C_W])/pk->r_sp_per_x +
-			(x[SINK_W] - x[SINK_C_W])/(pk->r_hs2_x + pk->r_hs);
-	dv[nl*nr*nc + SINK_C_W] = psum / (pk->c_hs_c_per_x + pk->c_amb_c_per_x);
-
-	psum = 0.0;
-	for(i=0; i < nr; i++)
-		psum += (A3D(v,hsidx,i,nc-1,nl,nr,nc) - x[SINK_C_E]);
-	psum /= (l[hsidx].rx / 2.0 + nr * pk->r_hs1_x);
-	psum += (c->ambient - x[SINK_C_E])/(pk->r_hs_c_per_x + pk->r_amb_c_per_x) + 
-			(x[SP_E] - x[SINK_C_E])/pk->r_sp_per_x +
-			(x[SINK_E] - x[SINK_C_E])/(pk->r_hs2_x + pk->r_hs);
-	dv[nl*nr*nc + SINK_C_E] = psum / (pk->c_hs_c_per_x + pk->c_amb_c_per_x);
-
-	/* spreader north/south	*/
-	/* partition r_sp1_y among all the nc grid cells. edge cell has half the ry	*/
-	psum = 0.0;
-	for(j=0; j < nc; j++)
-		psum += (A3D(v,spidx,0,j,nl,nr,nc) - x[SP_N]);
-	psum /= (l[spidx].ry / 2.0 + nc * pk->r_sp1_y);
-	psum += (x[SINK_C_N] - x[SP_N])/pk->r_sp_per_y;
-	dv[nl*nr*nc + SP_N] = psum / pk->c_sp_per_y;
-
-	psum = 0.0;
-	for(j=0; j < nc; j++)
-		psum += (A3D(v,spidx,nr-1,j,nl,nr,nc) - x[SP_S]);
-	psum /= (l[spidx].ry / 2.0 + nc * pk->r_sp1_y);
-	psum += (x[SINK_C_S] - x[SP_S])/pk->r_sp_per_y;
-	dv[nl*nr*nc + SP_S] = psum / pk->c_sp_per_y;
-
-	/* spreader west/east	*/
-	/* partition r_sp1_x among all the nr grid cells. edge cell has half the rx	*/
-	psum = 0.0;
-	for(i=0; i < nr; i++)
-		psum += (A3D(v,spidx,i,0,nl,nr,nc) - x[SP_W]);
-	psum /= (l[spidx].rx / 2.0 + nr * pk->r_sp1_x);
-	psum += (x[SINK_C_W] - x[SP_W])/pk->r_sp_per_x;
-	dv[nl*nr*nc + SP_W] = psum / pk->c_sp_per_x;
-
-	psum = 0.0;
-	for(i=0; i < nr; i++)
-		psum += (A3D(v,spidx,i,nc-1,nl,nr,nc) - x[SP_E]);
-	psum /= (l[spidx].rx / 2.0 + nr * pk->r_sp1_x);
-	psum += (x[SINK_C_E] - x[SP_E])/pk->r_sp_per_x;
-	dv[nl*nr*nc + SP_E] = psum / pk->c_sp_per_x;
-	
-	if (model->config.model_secondary) {
-		/* PCB outer north/south	*/
-		psum = (c->ambient - x[PCB_N])/(pk->r_amb_sec_per) + 
-			   (x[PCB_C_N] - x[PCB_N])/(pk->r_pcb2_y + pk->r_pcb);
-		dv[nl*nr*nc + PCB_N] = psum / (pk->c_pcb_per + pk->c_amb_sec_per);
-		psum = (c->ambient - x[PCB_S])/(pk->r_amb_sec_per) + 
-			   (x[PCB_C_S] - x[PCB_S])/(pk->r_pcb2_y + pk->r_pcb);
-		dv[nl*nr*nc + PCB_S] = psum / (pk->c_pcb_per + pk->c_amb_sec_per);
-  	
-		/* PCB outer west/east	*/
-		psum = (c->ambient - x[PCB_W])/(pk->r_amb_sec_per) + 
-			   (x[PCB_C_W] - x[PCB_W])/(pk->r_pcb2_x + pk->r_pcb);
-		dv[nl*nr*nc + PCB_W] = psum / (pk->c_pcb_per + pk->c_amb_sec_per);
-		psum = (c->ambient - x[PCB_E])/(pk->r_amb_sec_per) + 
-			   (x[PCB_C_E] - x[PCB_E])/(pk->r_pcb2_x + pk->r_pcb);
-		dv[nl*nr*nc + PCB_E] = psum / (pk->c_pcb_per + pk->c_amb_sec_per);
-  	
-		/* PCB inner north/south	*/
-		/* partition r_pcb1_y among all the nc grid cells. edge cell has half the ry	*/
-		psum = 0.0;
-		for(j=0; j < nc; j++)
-			psum += (A3D(v,pcbidx,0,j,nl,nr,nc) - x[PCB_C_N]);
-		psum /= (l[pcbidx].ry / 2.0 + nc * pk->r_pcb1_y);
-		psum += (c->ambient - x[PCB_C_N])/(pk->r_amb_sec_c_per_y) + 
-				(x[SOLDER_N] - x[PCB_C_N])/pk->r_pcb_c_per_y +
-				(x[PCB_N] - x[PCB_C_N])/(pk->r_pcb2_y + pk->r_pcb);
-		dv[nl*nr*nc + PCB_C_N] = psum / (pk->c_pcb_c_per_y + pk->c_amb_sec_c_per_y);
-  	
-		psum = 0.0;
-		for(j=0; j < nc; j++)
-			psum += (A3D(v,pcbidx,nr-1,j,nl,nr,nc) - x[PCB_C_S]);
-		psum /= (l[pcbidx].ry / 2.0 + nc * pk->r_pcb1_y);
-		psum += (c->ambient - x[PCB_C_S])/(pk->r_amb_sec_c_per_y) + 
-				(x[SOLDER_S] - x[PCB_C_S])/pk->r_pcb_c_per_y +
-				(x[PCB_S] - x[PCB_C_S])/(pk->r_pcb2_y + pk->r_pcb);
-		dv[nl*nr*nc + PCB_C_S] = psum / (pk->c_pcb_c_per_y + pk->c_amb_sec_c_per_y);
-  	
-  	/* PCB inner west/east	*/
-		/* partition r_pcb1_x among all the nr grid cells. edge cell has half the rx	*/
-		psum = 0.0;
-		for(i=0; i < nr; i++)
-			psum += (A3D(v,pcbidx,i,0,nl,nr,nc) - x[PCB_C_W]);
-		psum /= (l[pcbidx].rx / 2.0 + nr * pk->r_pcb1_x);
-		psum += (c->ambient - x[PCB_C_W])/(pk->r_amb_sec_c_per_x) + 
-				(x[SOLDER_W] - x[PCB_C_W])/pk->r_pcb_c_per_x +
-				(x[PCB_W] - x[PCB_C_W])/(pk->r_pcb2_x + pk->r_pcb);
-		dv[nl*nr*nc + PCB_C_W] = psum / (pk->c_pcb_c_per_x + pk->c_amb_sec_c_per_x);
-  	
-		psum = 0.0;
-		for(i=0; i < nr; i++)
-			psum += (A3D(v,pcbidx,i,nc-1,nl,nr,nc) - x[PCB_C_E]);
-		psum /= (l[pcbidx].rx / 2.0 + nr * pk->r_pcb1_x);
-		psum += (c->ambient - x[PCB_C_E])/(pk->r_amb_sec_c_per_x) + 
-				(x[SOLDER_E] - x[PCB_C_E])/pk->r_pcb_c_per_x +
-				(x[PCB_E] - x[PCB_C_E])/(pk->r_pcb2_x + pk->r_pcb);
-		dv[nl*nr*nc + PCB_C_E] = psum / (pk->c_pcb_c_per_x + pk->c_amb_sec_c_per_x);
-  	
-		/* solder ball north/south	*/
-		/* partition r_solder1_y among all the nc grid cells. edge cell has half the ry	*/
-		psum = 0.0;
-		for(j=0; j < nc; j++)
-			psum += (A3D(v,solderidx,0,j,nl,nr,nc) - x[SOLDER_N]);
-		psum /= (l[solderidx].ry / 2.0 + nc * pk->r_solder1_y);
-		psum += (x[PCB_C_N] - x[SOLDER_N])/pk->r_pcb_c_per_y;
-		dv[nl*nr*nc + SOLDER_N] = psum / pk->c_solder_per_y;
-  	
-		psum = 0.0;
-		for(j=0; j < nc; j++)
-			psum += (A3D(v,solderidx,nr-1,j,nl,nr,nc) - x[SOLDER_S]);
-		psum /= (l[solderidx].ry / 2.0 + nc * pk->r_solder1_y);
-		psum += (x[PCB_C_S] - x[SOLDER_S])/pk->r_pcb_c_per_y;
-		dv[nl*nr*nc + SOLDER_S] = psum / pk->c_solder_per_y;
-  	
-		/* solder ball west/east	*/
-		/* partition r_solder1_x among all the nr grid cells. edge cell has half the rx	*/
-		psum = 0.0;
-		for(i=0; i < nr; i++)
-			psum += (A3D(v,solderidx,i,0,nl,nr,nc) - x[SOLDER_W]);
-		psum /= (l[solderidx].rx / 2.0 + nr * pk->r_solder1_x);
-		psum += (x[PCB_C_W] - x[SOLDER_W])/pk->r_pcb_c_per_x;
-		dv[nl*nr*nc + SOLDER_W] = psum / pk->c_solder_per_x;
-  	
-		psum = 0.0;
-		for(i=0; i < nr; i++)
-			psum += (A3D(v,solderidx,i,nc-1,nl,nr,nc) - x[SOLDER_E]);
-		psum /= (l[solderidx].rx / 2.0 + nr * pk->r_solder1_x);
-		psum += (x[PCB_C_E] - x[SOLDER_E])/pk->r_pcb_c_per_x;
-		dv[nl*nr*nc + SOLDER_E] = psum / pk->c_solder_per_x;
-		
-		/* package substrate north/south	*/
-		/* partition r_sub1_y among all the nc grid cells. edge cell has half the ry	*/
-		psum = 0.0;
-		for(j=0; j < nc; j++)
-			psum += (A3D(v,subidx,0,j,nl,nr,nc) - x[SUB_N]);
-		psum /= (l[subidx].ry / 2.0 + nc * pk->r_sub1_y);
-		psum += (x[SOLDER_N] - x[SUB_N])/pk->r_solder_per_y;
-		dv[nl*nr*nc + SUB_N] = psum / pk->c_sub_per_y;
-  	
-		psum = 0.0;
-		for(j=0; j < nc; j++)
-			psum += (A3D(v,subidx,nr-1,j,nl,nr,nc) - x[SUB_S]);
-		psum /= (l[subidx].ry / 2.0 + nc * pk->r_sub1_y);
-		psum += (x[SOLDER_S] - x[SUB_S])/pk->r_solder_per_y;
-		dv[nl*nr*nc + SUB_S] = psum / pk->c_sub_per_y;
-  	
-		/* sub ball west/east	*/
-		/* partition r_sub1_x among all the nr grid cells. edge cell has half the rx	*/
-		psum = 0.0;
-		for(i=0; i < nr; i++)
-			psum += (A3D(v,subidx,i,0,nl,nr,nc) - x[SUB_W]);
-		psum /= (l[subidx].rx / 2.0 + nr * pk->r_sub1_x);
-		psum += (x[SOLDER_W] - x[SUB_W])/pk->r_solder_per_x;
-		dv[nl*nr*nc + SUB_W] = psum / pk->c_sub_per_x;
-  	
-		psum = 0.0;
-		for(i=0; i < nr; i++)
-			psum += (A3D(v,subidx,i,nc-1,nl,nr,nc) - x[SUB_E]);
-		psum /= (l[subidx].rx / 2.0 + nr * pk->r_sub1_x);
-		psum += (x[SOLDER_E] - x[SUB_E])/pk->r_solder_per_x;
-		dv[nl*nr*nc + SUB_E] = psum / pk->c_sub_per_x;
-	}
-}
-

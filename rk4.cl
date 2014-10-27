@@ -1,45 +1,10 @@
+/* gpu_rk4.h will be concatenated to the beginning of this file in Makefile */
 // #include "gpu_rk4.h"
-
-/*
-#ifdef cl_khr_fp64
-    #pragma OPENCL EXTENSION cl_khr_fp64 : enable
-#elif defined(cl_amd_fp64)
-    #pragma OPENCL EXTENSION cl_amd_fp64 : enable
-#else
-    #error "real precision floating point not supported by OpenCL implementation."
-#endif
-*/
 
 /* macro NUMBER_OF_ROWS, NUMBER_OF_COLS, LOCAL_SIZE_1, LOCAL_SIZE_0 will be defined at compilation time */
 
 #define NUM_GROUPS_1 ((NUMBER_OF_ROWS)/(LOCAL_SIZE_1))
 #define NUM_GROUPS_0 ((NUMBER_OF_COLS)/(LOCAL_SIZE_0))
-
-__kernel void rk4(__global float4* data, 
-      __local float* local_result, __global float* group_result) {
-
-   float sum;
-   float4 input1, input2, sum_vector;
-   uint global_addr, local_addr;
-   
-   global_addr = get_global_id(0) * 2;
-   input1 = data[global_addr];
-   input2 = data[global_addr+1];
-   sum_vector = input1 + input2;
-
-   local_addr = get_local_id(0);
-   local_result[local_addr] = sum_vector.s0 + sum_vector.s1 + 
-                              sum_vector.s2 + sum_vector.s3; 
-   barrier(CLK_LOCAL_MEM_FENCE);
-
-   if(get_local_id(0) == 0) {
-      sum = 0.0f;
-      for(int i=0; i<LOCAL_SIZE_0; i++) {
-         sum += local_result[i];
-      }
-      group_result[get_group_id(0)] = sum;
-   }
-}
 
 /* function to access a 1-d array as a 3-d matrix	*/
 // #define A3D(array,n,i,j,nl,nr,nc)		(array[(n)*(nr)*(nc) + (i)*(nc) + (j)])
@@ -98,7 +63,6 @@ __kernel void max_reduce(__global real *y, unsigned int n, __local real *local_r
 	y[get_group_id(0)] = local_result[0];
 }
 
-//finds sum of a row minus subVal
 void sum_row(__global real *v, int nl, int nr, int nc, __local real *local_result, int n, int i, real sub_val) {
 	uint local_id = mad24(get_local_id(1), LOCAL_SIZE_0, get_local_id(0));
 	uint threads_per_group = mul24(LOCAL_SIZE_0, LOCAL_SIZE_1);
@@ -131,7 +95,6 @@ void sum_row_with_endpoint(int nl, int nr, int nc, __local real *local_result, i
 	}
 }
 
-//finds sum of a column minus subVal
 void sum_col(__global real *v, int nl, int nr, int nc, __local real *local_result, int n, int j, real sub_val) {
 	uint local_id = mad24(get_local_id(1), LOCAL_SIZE_0, get_local_id(0));
 	uint threads_per_group = mul24(LOCAL_SIZE_0, LOCAL_SIZE_1);
@@ -246,7 +209,7 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 
 	
 
-/* sink inner north/south	*/
+	/* sink inner north/south	*/
 	/* partition r_hs1_y among all the nc grid cells. edge cell has half the ry	*/
 	if (block_id == (1 & num_blocks_mask))
 	{
@@ -668,44 +631,23 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 	
 }
 
-/* macros for calculating currents(power values)	*/
-/* current(power) from the next cell north. zero if on northern boundary	*/
-# define NP(l,v,n,i,j,nl,nr,nc)		((i > 0) ? ((A3D(v,n,i-1,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].ry) : 0.0)
-/* current(power) from the next cell south. zero if on southern boundary	*/
-# define SP(l,v,n,i,j,nl,nr,nc)		((i < nr-1) ? ((A3D(v,n,i+1,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].ry) : 0.0)
-/* current(power) from the next cell east. zero if on eastern boundary	*/
-# define EP(l,v,n,i,j,nl,nr,nc)		((j < nc-1) ? ((A3D(v,n,i,j+1,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].rx) : 0.0)
-/* current(power) from the next cell west. zero if on western boundary	*/
-# define WP(l,v,n,i,j,nl,nr,nc)		((j > 0) ? ((A3D(v,n,i,j-1,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].rx) : 0.0)
-/* current(power) from the next cell below. zero if on bottom face (with LAYERS_MASKulo)		*/
-# define BP(l,v,n,i,j,nl,nr,nc)		((n < nl-1) ? ((A3D(v,n+1,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n].rz) : 0.0)
-/* current(power) from the next cell above. zero if on top face	(with LAYERS_MASKulo)		*/
-# define AP(l,v,n,i,j,nl,nr,nc)		((n > 0) ? ((A3D(v,n-1,i,j,nl,nr,nc)-A3D(v,n,i,j,nl,nr,nc))/l[n-1].rz) : 0.0)
-
-/* Macros for reading from shared memory */
+/* macros for calculating currents(power values), reading from local memory	*/
 #define LAYERS_IN_LOCAL_MEM 4
 #define LAYERS_MASK ((LAYERS_IN_LOCAL_MEM) - 1)
 /* current(power) from the next cell north. zero if on northern boundary	*/
-# define NP_s(l,v,n,i,j,nl,nr,nc)		((A3D(v,(n)&(LAYERS_MASK),i-1,j,nl,nr,nc)-A3D(v,(n)&(LAYERS_MASK),i,j,nl,nr,nc))/l[n].ry)
-/* current(power) from the next cell south. zero if on southern boundary	*/
-# define SP_s(l,v,n,i,j,nl,nr,nc)		((A3D(v,(n)&(LAYERS_MASK),i+1,j,nl,nr,nc)-A3D(v,(n)&(LAYERS_MASK),i,j,nl,nr,nc))/l[n].ry)
-/* current(power) from the next cell east. zero if on eastern boundary	*/
-# define EP_s(l,v,n,i,j,nl,nr,nc)		((A3D(v,(n)&(LAYERS_MASK),i,j+1,nl,nr,nc)-A3D(v,(n)&(LAYERS_MASK),i,j,nl,nr,nc))/l[n].rx)
-/* current(power) from the next cell west. zero if on western boundary	*/
-# define WP_s(l,v,n,i,j,nl,nr,nc)		((A3D(v,(n)&(LAYERS_MASK),i,j-1,nl,nr,nc)-A3D(v,(n)&(LAYERS_MASK),i,j,nl,nr,nc))/l[n].rx)
-/* current(power) from the next cell below. zero if on bottom face (with LAYERS_MASKulo)		*/
-# define BP_s(l,v,n,i,j,nl,nr,nc)		((n < nl-1) ? ((A3D(v,(n+1)&(LAYERS_MASK),i,j,nl,nr,nc)-A3D(v,(n)&(LAYERS_MASK),i,j,nl,nr,nc))/l[n].rz) : 0.0)
-/* current(power) from the next cell above. zero if on top face	(with LAYERS_MASKulo)		*/
-# define AP_s(l,v,n,i,j,nl,nr,nc)		((n > 0) ? ((A3D(v,(n-1)&(LAYERS_MASK),i,j,nl,nr,nc)-A3D(v,(n)&(LAYERS_MASK),i,j,nl,nr,nc))/l[n-1].rz) : 0.0)
-/* Without address calculation */
 # define NP_as(l,v,n)		(((v[north_off]) - (center_value))/l[n].ry)
+/* current(power) from the next cell south. zero if on southern boundary	*/
 # define SP_as(l,v,n)		(((v[south_off]) - (center_value))/l[n].ry)
+/* current(power) from the next cell east. zero if on eastern boundary	*/
 # define EP_as(l,v,n)		(((v[east_off])  - (center_value))/l[n].rx)
+/* current(power) from the next cell west. zero if on western boundary	*/
 # define WP_as(l,v,n)		(((v[west_off])  - (center_value))/l[n].rx)
+/* current(power) from the next cell below. zero if on bottom face (with LAYERS_MASKulo)		*/
 # define BP_as(l,v,n)		((below_off != center_off) ? (((v[below_off]) - (center_value))/l[n].rz)  : 0.0)
+/* current(power) from the next cell above. zero if on top face	(with LAYERS_MASKulo)		*/
 # define AP_as(l,v,n)		((above_off != center_off) ? (((v[above_off]) - (center_value))/l[n-1].rz): 0.0)
 
-void load_v_to_shared(__global real *v, __local real * v_cached_layer, int n, unsigned int nl, unsigned int nr, unsigned int nc)
+void load_v_to_local(__global real *v, __local real * v_cached_layer, int n, unsigned int nl, unsigned int nr, unsigned int nc)
 {
 	int i = get_global_id(1); // row (row-major)
 	int j = get_global_id(0); // column
@@ -735,7 +677,7 @@ void load_v_to_shared(__global real *v, __local real * v_cached_layer, int n, un
 }
 
 /* load v = y + k * h into local memory */
-void load_v_to_shared_with_endpoint(__global real *y, __global real *k, real h, __local real * v_cached_layer, int n, unsigned int nl, unsigned int nr, unsigned int nc, __global real *v, bool save_to_local, bool save_to_global)
+void load_v_to_local_with_endpoint(__global real *y, __global real *k, real h, __local real * v_cached_layer, int n, unsigned int nl, unsigned int nr, unsigned int nc, __global real *v, bool save_to_local, bool save_to_global)
 {
 	int i = get_global_id(1); // row (row-major)
 	int j = get_global_id(0); // column
@@ -776,7 +718,7 @@ void load_v_to_shared_with_endpoint(__global real *y, __global real *k, real h, 
 }
 
 
-void load_extra_to_shared_with_endpoint(__global real *y, __global real *k, real h, __local real * extra_cached, int n)
+void load_extra_to_local_with_endpoint(__global real *y, __global real *k, real h, __local real * extra_cached, int n)
 {
 	int id = mad24(get_local_id(1), LOCAL_SIZE_0, get_local_id(0)); // row (row-major)
 	int stride = mul24(LOCAL_SIZE_1, LOCAL_SIZE_0);
@@ -787,7 +729,7 @@ void load_extra_to_shared_with_endpoint(__global real *y, __global real *k, real
 	barrier(CLK_LOCAL_MEM_FENCE);
 }
 
-void load_extra_to_shared(__global real *x, __local real * extra_cached, int n)
+void load_extra_to_local(__global real *x, __local real * extra_cached, int n)
 {
 	int id = mad24(get_local_id(1), LOCAL_SIZE_0, get_local_id(0)); // row (row-major)
 	int stride = mul24(LOCAL_SIZE_1, LOCAL_SIZE_0);
@@ -797,68 +739,6 @@ void load_extra_to_shared(__global real *x, __local real * extra_cached, int n)
 	}
 	barrier(CLK_LOCAL_MEM_FENCE);
 }
-
-/*  Test correctness of local memory caching */
-__kernel void slope_fn_grid_gpu_test(__constant gpu_grid_model_t *model __attribute__((max_constant_size(sizeof(gpu_grid_model_t)))), __constant gpu_layer_t *l __attribute__((max_constant_size(MAX_LAYER_SUPPORT*sizeof(gpu_layer_t)))), __global real *v, __global real *dv, unsigned int nl, unsigned int nr, unsigned int nc, __local real *local_result, __global real *p_cuboid)
-{
-	int n;
-	int i = get_global_id(1); // row (row-major)
-	int j = get_global_id(0); // column
-	
-	/* sum of the currents(power values)	*/
-	real psum;
-	
-	/* shortcuts for cell width(cw) and cell height(ch)	*/
-	real cw = model->width / model->cols;
-	real ch = model->height / model->rows;
-
-	/* shortcuts	*/
-	int spidx, hsidx, metalidx, c4idx, subidx, solderidx, pcbidx;
-	bool model_secondary = ENABLE_SECONDARY_MODEL;
-	real ambient = model->config.ambient;
-	real s_pcb = model->config.s_pcb;
-	/* pointer to the starting address of the extra nodes	*/
-	// __global real *x = v + mul24(nl, nr) * nc;
-
-	/* local memory cached v[] (4 layers maximum) */
-	__local real * v_cached[4];
-	n = mul24((LOCAL_SIZE_0 + 2), (LOCAL_SIZE_1 + 2));
-	v_cached[0] = local_result;
-	v_cached[1] = local_result + n;
-	v_cached[2] = v_cached[1] + n;
-	v_cached[3] = v_cached[2] + n;
-	/* load the first 4 layers */
-	for(n=0; n < min(nl, 0x4u); n++) {
-		load_v_to_shared(v, v_cached[n], n, nl, nr, nc);
-	}
-	uint next_layer = n - 1;
-	/* for local memory access */
-	int i_s = get_local_id(1) + 1;
-	int j_s = get_local_id(0) + 1;
-	int nr_s = LOCAL_SIZE_1 + 2;
-	int nc_s = LOCAL_SIZE_0 + 2;
-
-	
-	for(n=0; n < nl; n++) {
-		bool load_next_layer = (n == next_layer) && (next_layer + 1 < nl);
-		real psum = 0.0;
-		int n_s = n & 0x3;
-		if (load_next_layer) {
-			++next_layer;
-			load_v_to_shared(v, v_cached[next_layer & 0x3], next_layer, nl, nr, nc);
-		}
-		/* we expect psum  = 0 */
-		psum = 	(NP(l,v,n,i,j,nl,nr,nc) - NP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s)) + 
-			(SP(l,v,n,i,j,nl,nr,nc) - SP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s)) + 
-			(WP(l,v,n,i,j,nl,nr,nc) - WP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s)) + 
-			(EP(l,v,n,i,j,nl,nr,nc) - EP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s)) + 
-			(AP(l,v,n,i,j,nl,nr,nc) - AP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s)) + 
-			(BP(l,v,n,i,j,nl,nr,nc) - BP_s(l,v_cached[0],n,i_s,j_s,nl,nr_s,nc_s));
-		// A3D(dv,n,i,j,nl,nr,nc) = A3D(v,n,i,j,nl,nr,nc) + psum;
-		A3D(dv,n,i,j,nl,nr,nc) = A3D(v_cached[0],n_s,i_s,j_s,nl,nr_s,nc_s) + psum;
-	}
-}
-
 
 /* compute the slope vector for the grid cells. the transient
  * equation is CdV + sum{(T - Ti)/Ri} = P 
@@ -905,26 +785,26 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__
 		if (do_endpoint) {
 			// we only need these layers to be saved to global memory when secondary model is enabled, because the cache is not large enough to hold all layers
 			bool save_to_global = model_secondary && ((n == metalidx-1) || (n == c4idx));
-			load_v_to_shared_with_endpoint(y, k, h, v_cached[n], n, nl, nr, nc, v, 1, save_to_global); // v = y + k * h
+			load_v_to_local_with_endpoint(y, k, h, v_cached[n], n, nl, nr, nc, v, 1, save_to_global); // v = y + k * h
 		}
 		else {
-			load_v_to_shared(v, v_cached[n], n, nl, nr, nc);
+			load_v_to_local(v, v_cached[n], n, nl, nr, nc);
 		}
 	}
 	bool preload_spidx = do_endpoint && model_secondary;
 	if (preload_spidx) {
 		// compute layer spidx, subidx and save it to global memory. This layer will be used by secondary model before it is loaded into local (and global) memory.
-		load_v_to_shared_with_endpoint(y, k, h, v_cached[0], spidx , nl, nr, nc, v, 0, 1); // v = y + k * h
-		load_v_to_shared_with_endpoint(y, k, h, v_cached[0], subidx, nl, nr, nc, v, 0, 1); // v = y + k * h
+		load_v_to_local_with_endpoint(y, k, h, v_cached[0], spidx , nl, nr, nc, v, 0, 1); // v = y + k * h
+		load_v_to_local_with_endpoint(y, k, h, v_cached[0], subidx, nl, nr, nc, v, 0, 1); // v = y + k * h
 	}
 	uint next_layer = n - 1;
 
 	/* load extra nodes to local memory */
 	if (do_endpoint) {
-		load_extra_to_shared_with_endpoint(y + mul24(nl, nr) * nc, k + mul24(nl, nr) * nc, h, x, model_secondary ? (EXTRA + EXTRA_SEC) : (EXTRA));
+		load_extra_to_local_with_endpoint(y + mul24(nl, nr) * nc, k + mul24(nl, nr) * nc, h, x, model_secondary ? (EXTRA + EXTRA_SEC) : (EXTRA));
 	}
 	else {
-		load_extra_to_shared(v + mul24(nl, nr) * nc, x, model_secondary ? (EXTRA + EXTRA_SEC) : (EXTRA));
+		load_extra_to_local(v + mul24(nl, nr) * nc, x, model_secondary ? (EXTRA + EXTRA_SEC) : (EXTRA));
 	}
 
 	/* for local memory access */
@@ -953,10 +833,10 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__
 			++next_layer;
 			if (do_endpoint) {
 				bool save_to_global = model_secondary && ((next_layer == metalidx-1) || (next_layer == c4idx));
-				load_v_to_shared_with_endpoint(y, k, h, v_cached[next_layer & 0x3], next_layer, nl, nr, nc, v, 1, save_to_global); // v + k * h
+				load_v_to_local_with_endpoint(y, k, h, v_cached[next_layer & 0x3], next_layer, nl, nr, nc, v, 1, save_to_global); // v + k * h
 			}
 			else {
-				load_v_to_shared(v, v_cached[next_layer & 0x3], next_layer, nl, nr, nc);
+				load_v_to_local(v, v_cached[next_layer & 0x3], next_layer, nl, nr, nc);
 			}
 		}
 		/* pre-calculate address offsets, avoid unnecessary address re-calculation */
@@ -1045,7 +925,7 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__
 		if (model_secondary) {
 			/*** 
 			Some of these layers require other layers that are not in cache (i.e., not the 4 adjacent layers).
-			Some of them have been cached before, so simply save them to global memory when load_v_to_shared_with_endpoint() loads them.
+			Some of them have been cached before, so simply save them to global memory when load_v_to_local_with_endpoint() loads them.
 			However, layer spidx (layer 4) must be load earily since TIM layer (layer 1) will need it before layer 4 has been cached.
 			Because only the data and the current location (i_s, j_s) are used by these layers saved to global memory, there are no global synchronization issues.
 			***/
