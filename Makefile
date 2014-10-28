@@ -158,8 +158,18 @@ GPUOBJ = gpu.$(OEXT)
 GPUHDR = gpu.h
 GPUIN = rk4.cl
 
+# HotSpot leakage power feedback loop model
+LEAKAGESRC = leakage.c
+LEAKAGEOBJ = leakage.$(OEXT)
+LEAKAGEHDR = leakage.h
+LEAKAGEIN  = 
+
 # all objects
 OBJ	= $(TEMPOBJ) $(PACKOBJ) $(BLKOBJ) $(GRIDOBJ) $(FLPOBJ) $(MISCOBJ)
+
+ifdef LEAKAGE
+OBJ	:= $(OBJ) $(LEAKAGEOBJ)
+endif
 
 ifdef GPGPU
 OBJ	:= $(OBJ) $(GPUOBJ)
