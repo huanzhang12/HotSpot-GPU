@@ -195,7 +195,7 @@ int read_names(FILE *fp, char **names)
 }
 
 /* read a single line of power trace numbers	*/
-int read_vals(FILE *fp, double *vals)
+int read_vals(FILE *fp, double *vals, int max_units)
 {
 	char line[LINE_SIZE], temp[LINE_SIZE], *src;
 	int i;
@@ -215,14 +215,14 @@ int read_vals(FILE *fp, double *vals)
 		fatal("line too long\n");
 
 	/* chop the power values from the line read	*/
-	for(i=0,src=line; *src && i < MAX_UNITS; i++) {
+	for(i=0,src=line; *src && i < max_units; i++) {
 		if(!sscanf(src, "%s", temp) || !sscanf(src, "%lf", &vals[i]))
 			fatal("invalid format of values\n");
 		src += strlen(temp);
 		while (isspace((int)*src))
 			src++;
 	}
-	if(*src && i == MAX_UNITS)
+	if(*src && i == max_units)
 		fatal("no. of entries exceeded limit\n");
 
 	return i;
@@ -424,6 +424,14 @@ int main(int argc, char **argv)
 		fatal("unable to open power trace input file\n");
 	if(do_transient && !(tout = fopen(global_config.t_outfile, "w")))
 		fatal("unable to open temperature trace file for output\n");
+#if VARIABLE_INTVL_SUPPORT > 0
+	FILE* intvlin = NULL;
+	double intvl;
+	/* variable timestep from an input file */
+	if (strcmp(model->config->sampling_intvl_file, NULLFILE))
+		if(!(intvlin = fopen(model->config->sampling_intvl_file, "r")))
+			fatal("unable to open sampling interval input file\n");
+#endif
 
 	/* names of functional units	*/
 	names = alloc_names(MAX_UNITS, STR_SIZE);
@@ -442,7 +450,7 @@ int main(int argc, char **argv)
 
 	/* read the instantaneous power trace	*/
 	vals = dvector(MAX_UNITS);
-	while ((num=read_vals(pin, vals)) != 0) {
+	while ((num=read_vals(pin, vals, MAX_UNITS)) != 0) {
 		if(num != n)
 			fatal("invalid trace file format\n");
 
@@ -470,6 +478,15 @@ int main(int argc, char **argv)
 				natural = package_model(model->config, table, size, avg_sink_temp);
 				populate_R_model(model, flp);
 			}
+#if VARIABLE_INTVL_SUPPORT > 0
+			if (intvlin) {
+				num = read_vals(intvlin, &intvl, 1);
+				if (num != 1)
+					fatal("invalid samling interval file format\n");
+				model->config->sampling_intvl = intvl;
+				// printf("Current sampling interval: %g\n", model->config->sampling_intvl);
+			}
+#endif
 			/* for the grid model, only the first call to compute_temp
 			 * passes a non-null 'temp' array. if 'temp' is  NULL, 
 			 * compute_temp remembers it from the last non-null call. 
@@ -603,6 +620,11 @@ int main(int argc, char **argv)
 	#endif
 
 	/* cleanup	*/
+
+#if VARIABLE_INTVL_SUPPORT > 0
+	if(intvlin)
+		fclose(intvlin);
+#endif
 
 	fclose(pin);
 	if (do_transient)

@@ -72,6 +72,10 @@ thermal_config_t default_thermal_config(void)
 	strcpy(config.steady_file, NULLFILE);
  	/* 3.33 us sampling interval = 10K cycles at 3GHz	*/
 	config.sampling_intvl = 3.333e-6;
+#if VARIABLE_INTVL_SUPPORT > 0
+	/* sampling interval from file	*/
+	strcpy(config.sampling_intvl_file, NULLFILE);
+#endif
 	config.base_proc_freq = 3e9;		/* base processor frequency in Hz	*/
 	config.dtm_used = FALSE;			/* set accordingly	*/
 	
@@ -219,6 +223,11 @@ void thermal_config_add_from_strs(thermal_config_t *config, str_pair *table, int
 	if ((idx = get_str_index(table, size, "sampling_intvl")) >= 0)
 		if(sscanf(table[idx].value, "%lf", &config->sampling_intvl) != 1)
 			fatal("invalid format for configuration  parameter sampling_intvl\n");
+#if VARIABLE_INTVL_SUPPORT > 0
+	if ((idx = get_str_index(table, size, "sampling_intvl_file")) >= 0)
+		if(sscanf(table[idx].value, "%s", config->sampling_intvl_file) != 1)
+			fatal("invalid format for configuration  parameter sampling_intvl_file\n");
+#endif
 	if ((idx = get_str_index(table, size, "base_proc_freq")) >= 0)
 		if(sscanf(table[idx].value, "%lf", &config->base_proc_freq) != 1)
 			fatal("invalid format for configuration  parameter base_proc_freq\n");
@@ -299,7 +308,11 @@ void thermal_config_add_from_strs(thermal_config_t *config, str_pair *table, int
  */
 int thermal_config_to_strs(thermal_config_t *config, str_pair *table, int max_entries)
 {
+#if VARIABLE_INTVL_SUPPORT > 0
+	if (max_entries < 50)
+#else
 	if (max_entries < 49)
+#endif
 		fatal("not enough entries in table\n");
 
 	sprintf(table[0].name, "t_chip");
@@ -351,6 +364,9 @@ int thermal_config_to_strs(thermal_config_t *config, str_pair *table, int max_en
 	sprintf(table[46].name, "grid_layer_file");
 	sprintf(table[47].name, "grid_steady_file");
 	sprintf(table[48].name, "grid_map_mode");
+#if VARIABLE_INTVL_SUPPORT > 0
+	sprintf(table[49].value, "%s", config->sampling_intvl_file);
+#endif
 
 	sprintf(table[0].value, "%lg", config->t_chip);
 	sprintf(table[1].value, "%lg", config->k_chip);
@@ -401,8 +417,12 @@ int thermal_config_to_strs(thermal_config_t *config, str_pair *table, int max_en
 	sprintf(table[46].value, "%s", config->grid_layer_file);
 	sprintf(table[47].value, "%s", config->grid_steady_file);
 	sprintf(table[48].value, "%s", config->grid_map_mode);
-
+#if VARIABLE_INTVL_SUPPORT > 0
+	sprintf(table[49].value, "%s", config->sampling_intvl_file);
+	return 50;
+#else
 	return 49;
+#endif
 }
 
 /* package parameter routines	*/

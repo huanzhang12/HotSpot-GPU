@@ -191,6 +191,9 @@ typedef struct thermal_config_t_st
 	/* steady state temperatures to file	*/
 	char steady_file[STR_SIZE];
 	double sampling_intvl;	/* interval per call to compute_temp	*/
+#if VARIABLE_INTVL_SUPPORT > 0
+	char sampling_intvl_file[STR_SIZE];
+#endif
 	double base_proc_freq;	/* in Hz	*/
 	int dtm_used;			/* flag to guide the scaling of init Ts	*/
 	/* model type - block or grid */
