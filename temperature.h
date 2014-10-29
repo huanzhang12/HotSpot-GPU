@@ -3,7 +3,9 @@
 
 #include "flp.h"
 #include "util.h"
-
+#if ENABLE_LEAKAGE > 0
+#include "leakage.h"
+#endif
 #if GPGPU > 0
 #include "gpu.h"
 #endif
@@ -202,6 +204,9 @@ typedef struct thermal_config_t_st
 	/* temperature-leakage loop */
 	int leakage_used;
 	int leakage_mode;
+#if ENABLE_LEAKAGE > 0
+	leakage_coeff* p_leakage_coeff;
+#endif
 	
 	/* package model */
 	int package_model_used; /* flag to indicate whether package model is used */
@@ -367,7 +372,11 @@ void populate_R_model(RC_model_t *model, flp_t *flp);
 void populate_C_model(RC_model_t *model, flp_t *flp);
 
 /* hotspot main interfaces - temperature.c	*/
+#if ENABLE_LEAKAGE > 0
+void steady_state_temp(RC_model_t *model, double *power, double *static_power, double *temp);
+#else
 void steady_state_temp(RC_model_t *model, double *power, double *temp);
+#endif
 #if GPGPU > 0
 void compute_temp(RC_model_t *model, double *power, double *temp, double time_elapsed, gpu_config_t *gpu_config);
 #else

@@ -16,6 +16,9 @@
 #include "temperature.h"
 #include "temperature_block.h"
 #include "temperature_grid.h"
+#if ENABLE_LEAKAGE > 0
+#include "leakage.h"
+#endif
 #include "util.h"
 #include "hotspot.h"
 
@@ -84,7 +87,11 @@ void usage(int argc, char **argv)
 	fprintf(stdout, "   -f <file>\tfloorplan input file (e.g. ev6.flp) - overridden by the\n");
 	fprintf(stdout, "            \tlayer configuration file (e.g. layer.lcf) when the\n");
 	fprintf(stdout, "            \tlatter is specified\n");
-	fprintf(stdout, "   -p <file>\tpower trace input file (e.g. gcc.ptrace)\n");
+#if ENABLE_LEAKAGE > 0
+	fprintf(stdout, "   -s <file>\tstatic (leakage) power trace input file (e.g. gcc.sta.ptrace)\n");
+	fprintf(stdout, "   -t <file>\tstatic (leakage) power scaling factors at different temperatures (e.g.: leakage.txt)\n");
+#endif
+	fprintf(stdout, "   -p <file>\ttotal or dynamic power trace input file (e.g. gcc.dyn.ptrace)\n");
 	fprintf(stdout, "  [-o <file>]\ttransient temperature trace output file - if not provided, only\n");
 	fprintf(stdout, "            \tsteady state temperatures are output to stdout\n");
 	fprintf(stdout, "  [-c <file>]\tinput configuration parameters from file (e.g. hotspot.config)\n");
@@ -113,6 +120,20 @@ void global_config_from_strs(global_config_t *config, str_pair *table, int size)
 	} else {
 		fatal("required parameter p_infile missing. check usage\n");
 	}
+#if ENABLE_LEAKAGE > 0
+	if ((idx = get_str_index(table, size, "s")) >= 0) {
+		if(sscanf(table[idx].value, "%s", config->p_stafile) != 1)
+			fatal("invalid format for configuration  parameter p_stafile\n");
+	} else {
+		strcpy(config->p_stafile, NULLFILE);
+	}
+	if ((idx = get_str_index(table, size, "t")) >= 0) {
+		if(sscanf(table[idx].value, "%s", config->p_coefffile) != 1)
+			fatal("invalid format for configuration  parameter p_coefffile\n");
+	} else {
+		strcpy(config->p_coefffile, NULLFILE);
+	}
+#endif
 	if ((idx = get_str_index(table, size, "o")) >= 0) {
 		if(sscanf(table[idx].value, "%s", config->t_outfile) != 1)
 			fatal("invalid format for configuration  parameter t_outfile\n");
@@ -139,7 +160,11 @@ void global_config_from_strs(global_config_t *config, str_pair *table, int size)
  */
 int global_config_to_strs(global_config_t *config, str_pair *table, int max_entries)
 {
+#if ENABLE_LEAKAGE > 0
+	if (max_entries < 7)
+#else
 	if (max_entries < 5)
+#endif
 		fatal("not enough entries in table\n");
 
 	sprintf(table[0].name, "f");
@@ -147,14 +172,26 @@ int global_config_to_strs(global_config_t *config, str_pair *table, int max_entr
 	sprintf(table[2].name, "o");
 	sprintf(table[3].name, "c");
 	sprintf(table[4].name, "d");
+#if ENABLE_LEAKAGE > 0
+	sprintf(table[5].name, "s");
+	sprintf(table[6].name, "t");
+#endif
 
 	sprintf(table[0].value, "%s", config->flp_file);
 	sprintf(table[1].value, "%s", config->p_infile);
 	sprintf(table[2].value, "%s", config->t_outfile);
 	sprintf(table[3].value, "%s", config->config);
 	sprintf(table[4].value, "%s", config->dump_config);
+#if ENABLE_LEAKAGE > 0
+	sprintf(table[5].value, "%s", config->p_stafile);
+	sprintf(table[6].value, "%s", config->p_coefffile);
+#endif
 
+#if ENABLE_LEAKAGE > 0
+	return 7;
+#else
 	return 5;
+#endif
 }
 
 /* 
@@ -235,6 +272,7 @@ void write_names(FILE *fp, char **names, int size)
 	for(i=0; i < size-1; i++)
 		fprintf(fp, "%s\t", names[i]);
 	fprintf(fp, "%s\n", names[i]);
+	fflush(fp);
 }
 
 /* write a single line of temperature trace(in degree C)	*/
@@ -244,6 +282,7 @@ void write_vals(FILE *fp, double *vals, int size)
 	for(i=0; i < size-1; i++)
 		fprintf(fp, "%.2f\t", vals[i]-273.15);
 	fprintf(fp, "%.2f\n", vals[i]-273.15);
+	fflush(fp);
 }
 
 char **alloc_names(int nr, int nc)
@@ -295,6 +334,19 @@ int main(int argc, char **argv)
 	/* instantaneous temperature and power values	*/
 	double *temp = NULL, *power;
 	double total_power = 0.0;
+#if ENABLE_LEAKAGE > 0
+	int do_leakage = FALSE;
+	char **static_names;
+	/* static (leakage) power input */
+	double *svals;
+	FILE *pstain, *pcoeffin;
+	leakage_coeff* p_leakage_coeff;
+	double *static_power, *dynamic_power;
+	/* base temperature for static power feedback simulation */
+	double base_temp = 0.0;
+	/* steady state temperature and power values	*/
+	double *static_overall_power;
+#endif
 	
 	/* steady state temperature and power values	*/
 	double *overall_power, *steady_temp;
@@ -396,6 +448,11 @@ int main(int argc, char **argv)
 	power = hotspot_vector(model);
 	steady_temp = hotspot_vector(model);
 	overall_power = hotspot_vector(model);
+#if ENABLE_LEAKAGE > 0
+	static_power = hotspot_vector(model);
+	dynamic_power = hotspot_vector(model);
+	static_overall_power = hotspot_vector(model);
+#endif
 	
 	/* set up initial instantaneous temperatures */
 	if (do_transient && strcmp(model->config->init_file, NULLFILE)) {
@@ -420,6 +477,25 @@ int main(int argc, char **argv)
 	} else 
 		fatal("unknown model type\n");
 
+#if ENABLE_LEAKAGE > 0
+	/* Enable static power feedback */
+	if(model->config->leakage_used) {
+		if(strcmp(global_config.p_stafile, NULLFILE)) {
+		/* A valid temperature and a leakage coefficients files must be provided */
+			if(strcmp(global_config.p_coefffile, NULLFILE))
+				do_leakage = TRUE;
+			else
+				fatal("a temperature coefficients file must be provided\n");
+		}
+		else
+			fatal("a static power trace file must be provided\n");
+	}
+	if(do_leakage && !(pstain = fopen(global_config.p_stafile, "r")))
+		fatal("unable to open static power trace input file\n");
+	if(do_leakage && !(pcoeffin = fopen(global_config.p_coefffile, "r")))
+		fatal("unable to open static temperature coefficients input file\n");
+
+#endif
 	if(!(pin = fopen(global_config.p_infile, "r")))
 		fatal("unable to open power trace input file\n");
 	if(do_transient && !(tout = fopen(global_config.t_outfile, "w")))
@@ -444,32 +520,120 @@ int main(int argc, char **argv)
 		gpu_init(&gpu_config, model->grid);
 #endif
 
+#if ENABLE_LEAKAGE > 0
+	/* check static power trace file and load the coefficient file */
+	if (do_leakage) {
+		int i;
+		static_names = alloc_names(MAX_UNITS, STR_SIZE);
+		if(read_names(pstain, static_names) != n)
+			fatal("no. of units in floorplan and static trace file differ\n");
+		for(i=0; i<n; ++i)
+			if(strcmp(names[i], static_names[i]))
+				fatal("function units in dynamic and static trace file differ\n");
+		p_leakage_coeff = load_leakage_coeff(pcoeffin, &base_temp);
+		model->config->p_leakage_coeff = p_leakage_coeff;
+		// if(!do_transient)
+		//	fatal("transient mode must be used during static power feedback\n");
+	}
+	else {
+		model->config->p_leakage_coeff = p_leakage_coeff = NULL;
+	}
+#endif
+
 	/* header line of temperature trace	*/
 	if (do_transient)
 		write_names(tout, names, n);
 
 	/* read the instantaneous power trace	*/
 	vals = dvector(MAX_UNITS);
+#if ENABLE_LEAKAGE > 0
+	svals = dvector(MAX_UNITS);
+#endif
 	while ((num=read_vals(pin, vals, MAX_UNITS)) != 0) {
-		if(num != n)
+		if(num != n) {
+			printf("got %d items, expecting %d\n", num, n);
 			fatal("invalid trace file format\n");
-
+		}
+#if ENABLE_LEAKAGE > 0
+		double blk_height, blk_width;
+		double coeff;
+		if(do_leakage) {
+			num=read_vals(pstain, svals, MAX_UNITS);
+			if(num != n)
+				fatal("invalid static trace file format\n");
+		}
+#endif
 		/* permute the power numbers according to the floorplan order	*/
 		if (model->type == BLOCK_MODEL)
-			for(i=0; i < n; i++)
+			for(i=0; i < n; i++) {
+#if ENABLE_LEAKAGE > 0
+				/* we might need a density multiplier for static, so we pass height and width to compute_leakage_power() */
+				int idx = get_blk_index(flp, names[i]);
+				blk_height = model->block->flp->units[idx].height;
+				blk_width = model->block->flp->units[idx].width;
+				dynamic_power[idx] = vals[i];
+				if (do_leakage) {
+					coeff = do_transient ? compute_leakage_power(p_leakage_coeff, blk_height, blk_width, temp[idx]) : 1;
+					static_power[idx] = svals[i];
+				}
+				else {
+					coeff = 0;
+					static_power[idx] = 0;
+				}
+				/* if we do transient, we need to recompute the static (leakage) power according to the temperature */
+				if (do_transient) {
+					power[idx] = dynamic_power[idx] + static_power[idx] * coeff;
+					#if VERBOSE > 1
+					if(do_leakage)
+						printf("block index = %d: dynamic = %f, static = %f, temp = %f, coeff = %f, new_power = %f\n", idx, dynamic_power[idx], static_power[idx], temp[idx], coeff, power[idx]);
+					#endif
+				}
+				/* if we don't do transient, we only need the average to compute the steady state temperature, */
+				/* and compute the temperature in the steady_state_temp() */
+				else
+					power[idx] = dynamic_power[idx] + static_power[idx];
+#else
 				power[get_blk_index(flp, names[i])] = vals[i];
+#endif
+			}
 		else
 			for(i=0, base=0, count=0; i < model->grid->n_layers; i++) {
 				if(model->grid->layers[i].has_power) {
 					for(j=0; j < model->grid->layers[i].flp->n_units; j++) {
 						idx = get_blk_index(model->grid->layers[i].flp, names[count+j]);
+#if ENABLE_LEAKAGE > 0
+						blk_height = model->grid->layers[i].flp->units[idx].height;
+						blk_width = model->grid->layers[i].flp->units[idx].width;
+						dynamic_power[base+idx] = vals[count+j];
+						if (do_leakage) {
+							coeff = do_transient ? compute_leakage_power(p_leakage_coeff, blk_height, blk_width, temp[base+idx]) : 1;
+							static_power[base+idx] = svals[count+j];
+						}
+						else {
+							coeff = 0;
+							static_power[base+idx] = 0;
+						}	
+						if (do_transient) {
+							power[base+idx] = dynamic_power[base+idx] + static_power[base+idx] * coeff;
+							#if VERBOSE > 1
+							if(do_leakage)
+								printf("grid index = %d: dynamic = %f, static = %f, temp = %f, coeff = %f, new_power = %f\n", base+idx, dynamic_power[base+idx], static_power[base+idx], temp[base+idx], coeff, power[base+idx]);
+							#endif
+						}
+						else
+							power[base+idx] = dynamic_power[base+idx] + static_power[base+idx];
+#else
 						power[base+idx] = vals[count+j];
+#endif
 					}
 					count += model->grid->layers[i].flp->n_units;
 				}	
 				base += model->grid->layers[i].flp->n_units;	
 			}
-
+		#if VERBOSE > 0
+		printf("Computing step %d...\n", lines);
+		fflush(stdout);
+		#endif
 		/* compute temperature	*/
 		if (do_transient) {
 			/* if natural convection is considered, update transient convection resistance first */
@@ -527,13 +691,26 @@ int main(int argc, char **argv)
 	
 		/* for computing average	*/
 		if (model->type == BLOCK_MODEL)
-			for(i=0; i < n; i++)
+			for(i=0; i < n; i++) {
+#if ENABLE_LEAKAGE > 0
+				// the overall power is not calibrated using temperature. The feedback will be done in steady_state_temp()
+				overall_power[i] += (dynamic_power[i] + static_power[i]);
+				static_overall_power[i] += static_power[i];
+#else
 				overall_power[i] += power[i];
+#endif
+			}
 		else
 			for(i=0, base=0; i < model->grid->n_layers; i++) {
 				if(model->grid->layers[i].has_power)
-					for(j=0; j < model->grid->layers[i].flp->n_units; j++)
+					for(j=0; j < model->grid->layers[i].flp->n_units; j++) {
+#if ENABLE_LEAKAGE > 0
+						overall_power[base+j] += (dynamic_power[base+j] + static_power[base+j]);
+						static_overall_power[base+j] += static_power[base+j];
+#else
 						overall_power[base+j] += power[base+j];
+#endif
+					}
 				base += model->grid->layers[i].flp->n_units;	
 			}
 
@@ -549,11 +726,14 @@ int main(int argc, char **argv)
 #endif
 	/* compute steady state temperature only when an steady temperature output file is given, or we are not doing transient simulation */
 	if (strcmp(model->config->steady_file, NULLFILE) || !do_transient) {
-		/* for computing average	*/
+		/* for computing overall average (overall_power) */
 		if (model->type == BLOCK_MODEL)
 			for(i=0; i < n; i++) {
 				overall_power[i] /= lines;
 				//overall_power[i] /=150; //reduce input power for natural convection
+#if ENABLE_LEAKAGE > 0
+				static_overall_power[i] /= lines;
+#endif
 				total_power += overall_power[i];
 			}
 		else
@@ -561,6 +741,9 @@ int main(int argc, char **argv)
 				if(model->grid->layers[i].has_power)
 					for(j=0; j < model->grid->layers[i].flp->n_units; j++) {
 						overall_power[base+j] /= lines;
+#if ENABLE_LEAKAGE > 0
+						static_overall_power[base+j] /= lines;
+#endif
 						total_power += overall_power[base+j];
 					}
 				base += model->grid->layers[i].flp->n_units;
@@ -572,7 +755,11 @@ int main(int argc, char **argv)
 			while (!natural_convergence) {
 				r_convec_old = model->config->r_convec;
 				/* steady state temperature	*/
+#if ENABLE_LEAKAGE > 0
+				steady_state_temp(model, overall_power, static_overall_power, steady_temp);
+#else
 				steady_state_temp(model, overall_power, steady_temp);
+#endif
 				avg_sink_temp = calc_sink_temp(model, steady_temp) + SMALL_FOR_CONVEC;
 				natural = package_model(model->config, table, size, avg_sink_temp);
 				populate_R_model(model, flp);
@@ -582,8 +769,13 @@ int main(int argc, char **argv)
 					natural_convergence = 1;
 			}
 		}	else /* natural convection is not used, no need for iterations */
-			/* steady state temperature	*/
-			steady_state_temp(model, overall_power, steady_temp);
+		/* steady state temperature	*/
+#if ENABLE_LEAKAGE > 0
+		/* using the overall (average) power because no traces are needed */
+		steady_state_temp(model, overall_power, static_overall_power, steady_temp);
+#else
+		steady_state_temp(model, overall_power, steady_temp);
+#endif
 
 		/* print steady state results	*/
 		fprintf(stdout, "Unit\tSteady(Kelvin)\n");
@@ -624,6 +816,19 @@ int main(int argc, char **argv)
 #if VARIABLE_INTVL_SUPPORT > 0
 	if(intvlin)
 		fclose(intvlin);
+#endif
+
+#if ENABLE_LEAKAGE > 0
+	if (do_leakage){
+		fclose(pstain);
+		fclose(pcoeffin);
+		free_leakage_coeff(p_leakage_coeff);
+		free_names(static_names);
+	}
+	free_dvector(dynamic_power);
+	free_dvector(static_power);
+	free_dvector(static_overall_power);
+	free_dvector(svals);
 #endif
 
 	fclose(pin);

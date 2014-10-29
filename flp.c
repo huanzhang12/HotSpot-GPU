@@ -35,7 +35,11 @@ double flp_evaluate_metric(flp_t *flp, RC_model_t *model, double *power,
 
 	temp = hotspot_vector(model);
 	populate_R_model(model, flp);
+#if ENABLE_LEAKAGE > 0
+	steady_state_temp(model, power, NULL, temp);
+#else
 	steady_state_temp(model, power, temp);
+#endif
 	tmax = find_max_temp(model, temp);
 	area = get_total_area(flp);
 	wire_length = get_wire_metric(flp);
@@ -1329,7 +1333,11 @@ void print_flp_stats(flp_t *flp, RC_model_t *model,
 	wire_metric = get_wire_metric(flp);
 
 	populate_R_model(model, flp);
+#if ENABLE_LEAKAGE > 0
+	steady_state_temp(model, power, NULL, temp);
+#else
 	steady_state_temp(model, power, temp);
+#endif
 	peak = find_max_temp(model, temp);
 	avg = find_avg_temp(model, temp);
 

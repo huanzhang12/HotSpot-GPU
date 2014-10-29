@@ -279,8 +279,8 @@ void thermal_config_add_from_strs(thermal_config_t *config, str_pair *table, int
 		fatal("secondary heat tranfer layer dimensions should be greater than zero\n");
 	/* leakage iteration is not supported in transient mode in this release */
 	if (config->leakage_used == 1) {
-		printf("Warning: transient leakage iteration is not supported in this release...\n");
-		printf(" ...all transient results are without thermal-leakage loop.\n");
+		printf("Warning: transient leakage iteration is experimental in this release...\n");
+		printf(" ...you may get wrong results especially when using an inappropriate sampling interval.\n");
 	}		
 	if ((config->model_secondary == 1) && (!strcasecmp(config->model_type, BLOCK_MODEL_STR)))
 		fatal("secondary heat tranfer path is supported only in the grid mode\n");	
@@ -623,7 +623,11 @@ void populate_C_model(RC_model_t *model, flp_t *flp)
 }
 
 /* steady state temperature	*/
+#if ENABLE_LEAKAGE > 0
+void steady_state_temp(RC_model_t *model, double *power, double *static_power, double *temp) 
+#else
 void steady_state_temp(RC_model_t *model, double *power, double *temp) 
+#endif
 {
 //	if (model->type == BLOCK_MODEL)
 //		steady_state_temp_block(model->block, power, temp);
@@ -642,7 +646,12 @@ void steady_state_temp(RC_model_t *model, double *power, double *temp)
 	double *temp_old = NULL;
 	double *power_new = NULL;
 	double d_max=0.0;
-	
+#if ENABLE_LEAKAGE > 0
+	if((!static_power) && model->config->leakage_used) {
+		printf("Warning: leakage feedback has been disabled due to static_power == NULL\n");
+		model->config->leakage_used = 0;
+	}
+#endif
 	if (model->type == BLOCK_MODEL) {
 		n = model->block->flp->n_units;
 		if (model->config->leakage_used) { // if considering leakage-temperature loop
@@ -653,9 +662,18 @@ void steady_state_temp(RC_model_t *model, double *power, double *temp)
 				for(i=0; i < n; i++) {
 					blk_height = model->block->flp->units[i].height;
 					blk_width = model->block->flp->units[i].width;
+#if ENABLE_LEAKAGE > 0
+					/* power[i] = total - static = dynamic */
+					power_new[i] = power[i] - static_power[i] + static_power[i] * compute_leakage_power(model->config->p_leakage_coeff,blk_height,blk_width,temp[i]);
+#else
 					power_new[i] = power[i] + calc_leakage(model->config->leakage_mode,blk_height,blk_width,temp[i]);
+#endif
 					temp_old[i] = temp[i]; //copy temp before update
 				}
+				#if VERBOSE > 0
+				printf("steady_state_temp, block: iteration = %d, ", leak_iter);
+				fflush(stdout);
+				#endif
 				steady_state_temp_block(model->block, power_new, temp); // update temperature
 				d_max = 0.0;
 				for(i=0; i < n; i++) {
@@ -667,6 +685,9 @@ void steady_state_temp(RC_model_t *model, double *power, double *temp)
 				if (d_max < LEAK_TOL) {// check convergence
 					leak_convg_true = 1;
 				}
+				#if VERBOSE > 0
+				printf("max temperature diff = %f\n", d_max);
+				#endif
 				if (d_max > TEMP_HIGH && leak_iter > 1) {// check to make sure d_max is not "nan" (esp. in natural convection)
 					fatal("temperature is too high, possible thermal runaway. Double-check power inputs and package settings.\n");
 				}
@@ -691,11 +712,24 @@ void steady_state_temp(RC_model_t *model, double *power, double *temp)
 						for(j=0; j < model->grid->layers[k].flp->n_units; j++) {
 							blk_height = model->grid->layers[k].flp->units[j].height;
 							blk_width = model->grid->layers[k].flp->units[j].width;
+#if ENABLE_LEAKAGE > 0
+							double coeff;
+							coeff = compute_leakage_power(model->config->p_leakage_coeff, blk_height, blk_width, temp[base+j]);
+							power_new[base+j] = power[base+j] - static_power[base+j] + static_power[base+j]  * coeff;
+#else
 							power_new[base+j] = power[base+j] + calc_leakage(model->config->leakage_mode,blk_height,blk_width,temp[base+j]);
+#endif
 							temp_old[base+j] = temp[base+j]; //copy temp before update
+							#if VERBOSE > 0
+							printf("element %d at temp %f: power_old = %f, static_old = %f, coeff = %f, power_new = %f\n", base+j, temp[base+j], power[base+j], static_power[base+j], coeff, power_new[base+j]);
+							#endif
 						}
 					base += model->grid->layers[k].flp->n_units;	
 				}
+				#if VERBOSE > 0
+				printf("steady_state_temp, grid: iteration = %d, ", leak_iter);
+				fflush(stdout);
+				#endif
 				steady_state_temp_grid(model->grid, power_new, temp);
 				d_max = 0.0;
 				for(k=0, base=0; k < model->grid->n_layers; k++) {
@@ -710,6 +744,9 @@ void steady_state_temp(RC_model_t *model, double *power, double *temp)
 				if (d_max < LEAK_TOL) {// check convergence
 					leak_convg_true = 1;
 				}
+				#if VERBOSE > 0
+				printf("max temperature diff = %f\n", d_max);
+				#endif
 				if (d_max > TEMP_HIGH && leak_iter > 0) {// check to make sure d_max is not "nan" (esp. in natural convection)
 					fatal("temperature is too high, possible thermal runaway. Double-check power inputs and package settings.\n");
 				}

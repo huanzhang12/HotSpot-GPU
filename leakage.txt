@@ -1,0 +1,18 @@
+# baseline temperature from SniperSim and scaling coefficient
+330, 0.1
+# 22nm technology
+0,0
+300, 9.94E-08
+310, 1.92E-07
+320, 3.71E-07
+330, 7.17E-07
+340, 1.38E-06
+350, 2.67E-06
+360, 5.17E-06
+370, 9.98E-06
+380, 1.93E-05
+390, 3.73E-05
+400, 7.20E-05
+
+
+
