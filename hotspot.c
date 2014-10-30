@@ -583,7 +583,7 @@ int main(int argc, char **argv)
 				/* if we do transient, we need to recompute the static (leakage) power according to the temperature */
 				if (do_transient) {
 					power[idx] = dynamic_power[idx] + static_power[idx] * coeff;
-					#if VERBOSE > 1
+					#if VERBOSE > 2
 					if(do_leakage)
 						printf("block index = %d: dynamic = %f, static = %f, temp = %f, coeff = %f, new_power = %f\n", idx, dynamic_power[idx], static_power[idx], temp[idx], coeff, power[idx]);
 					#endif
@@ -630,7 +630,7 @@ int main(int argc, char **argv)
 				}	
 				base += model->grid->layers[i].flp->n_units;	
 			}
-		#if VERBOSE > 0
+		#if VERBOSE > 1
 		printf("Computing step %d...\n", lines);
 		fflush(stdout);
 		#endif

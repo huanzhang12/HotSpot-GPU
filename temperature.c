@@ -670,7 +670,7 @@ void steady_state_temp(RC_model_t *model, double *power, double *temp)
 #endif
 					temp_old[i] = temp[i]; //copy temp before update
 				}
-				#if VERBOSE > 0
+				#if VERBOSE > 1
 				printf("steady_state_temp, block: iteration = %d, ", leak_iter);
 				fflush(stdout);
 				#endif
@@ -685,7 +685,7 @@ void steady_state_temp(RC_model_t *model, double *power, double *temp)
 				if (d_max < LEAK_TOL) {// check convergence
 					leak_convg_true = 1;
 				}
-				#if VERBOSE > 0
+				#if VERBOSE > 1
 				printf("max temperature diff = %f\n", d_max);
 				#endif
 				if (d_max > TEMP_HIGH && leak_iter > 1) {// check to make sure d_max is not "nan" (esp. in natural convection)
@@ -716,17 +716,17 @@ void steady_state_temp(RC_model_t *model, double *power, double *temp)
 							double coeff;
 							coeff = compute_leakage_power(model->config->p_leakage_coeff, blk_height, blk_width, temp[base+j]);
 							power_new[base+j] = power[base+j] - static_power[base+j] + static_power[base+j]  * coeff;
+							#if VERBOSE > 1
+							printf("element %d at temp %f: power_old = %f, static_old = %f, coeff = %f, power_new = %f\n", base+j, temp[base+j], power[base+j], static_power[base+j], coeff, power_new[base+j]);
+							#endif
 #else
 							power_new[base+j] = power[base+j] + calc_leakage(model->config->leakage_mode,blk_height,blk_width,temp[base+j]);
 #endif
 							temp_old[base+j] = temp[base+j]; //copy temp before update
-							#if VERBOSE > 0
-							printf("element %d at temp %f: power_old = %f, static_old = %f, coeff = %f, power_new = %f\n", base+j, temp[base+j], power[base+j], static_power[base+j], coeff, power_new[base+j]);
-							#endif
 						}
 					base += model->grid->layers[k].flp->n_units;	
 				}
-				#if VERBOSE > 0
+				#if VERBOSE > 1
 				printf("steady_state_temp, grid: iteration = %d, ", leak_iter);
 				fflush(stdout);
 				#endif
@@ -744,7 +744,7 @@ void steady_state_temp(RC_model_t *model, double *power, double *temp)
 				if (d_max < LEAK_TOL) {// check convergence
 					leak_convg_true = 1;
 				}
-				#if VERBOSE > 0
+				#if VERBOSE > 1
 				printf("max temperature diff = %f\n", d_max);
 				#endif
 				if (d_max > TEMP_HIGH && leak_iter > 0) {// check to make sure d_max is not "nan" (esp. in natural convection)
