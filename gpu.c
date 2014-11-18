@@ -251,6 +251,7 @@ void gpu_create_buffers(gpu_config_t *config, grid_model_t *model)
 				m[i][j] =  m[0][0] + (nl * nr) * i + nr * j;
 		/* save this cuboid pointer so that we can swap it later */
 		config->cuboid_ytemp = m;
+		// printf("Mapped buffer addresses: config->pinned_h_y = %p, config->pinned_h_ytemp = %p\n", config->pinned_h_y, config->pinned_h_ytemp);
 	}
 }
 
@@ -292,18 +293,18 @@ void* gpu_allocate_cuboid_static(size_t size)
 
 void gpu_free_cuboid_static(void* cuboid)
 {
-	if (current_gpu_config != NULL && cuboid == current_gpu_config->pinned_h_y)
+	if (current_gpu_config != NULL && (cuboid == current_gpu_config->pinned_h_y || cuboid == current_gpu_config->pinned_h_ytemp))
 	{
-		// the pinned buffer has been freed by gpu_destroy
+		// the pinned buffer (current_gpu_config->pinned_h_y and current_gpu_config->pinned_h_ytemp) has been freed by gpu_destroy(). Don't double free here!
 		return;
 	}
 	if (current_gpu_config == NULL || !current_gpu_config->gpu_enabled || cuboid != current_gpu_config->pinned_h_cuboid) {
 	// if (1) {
-		// printf("freeing %p\n", cuboid);
+		// printf("gpu_free_cuboid_static() freeing regular pointer %p\n", cuboid);
 		free(cuboid);
 		return;
 	}
-	// printf("freeing pinned buffer at %p\n", cuboid);
+	// printf("gpu_free_cuboid_static() freeing pinned buffer at %p\n", cuboid);
 	if (current_gpu_config->h_cuboid_reference > 0) {
 		current_gpu_config->h_cuboid_reference--;
 	}
@@ -331,8 +332,18 @@ void gpu_delete_buffers(gpu_config_t *config)
 	if (config->unified_memory_optimization) {
 		clEnqueueUnmapMemObject(config->_cl_queue, config->h_ytemp, config->pinned_h_ytemp, 0, NULL, NULL);
 		clReleaseMemObject(config->h_ytemp);
-		free(config->cuboid_ytemp[0]);
-		free(config->cuboid_ytemp);
+		/* only delete one cuboid here - the other one will be freed in free_grid_model_vector() */
+		/* pinned buffer has been freed above, and gpu_free_cuboid_static() will take care of them */
+		if (config->last_io_buf) {
+			// printf("freeing cuboid_y at %p, %p\n", config->cuboid_y[0], config->cuboid_y);
+			free(config->cuboid_y[0]);
+			free(config->cuboid_y);
+		}
+		else {
+			// printf("freeing cuboid_ytemp at %p, %p\n", config->cuboid_ytemp[0], config->cuboid_ytemp);
+			free(config->cuboid_ytemp[0]);
+			free(config->cuboid_ytemp);
+		}
 	}
 }
 
@@ -680,9 +691,11 @@ double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, dou
 	if (config->unified_memory_optimization) {
 		if (config->last_io_buf) {
 			last_trans->cuboid = config->cuboid_ytemp; // cuboid config->h_ytemp
+			// printf("last_trans->cuboid = cuboid_ytemp = %p\n", config->cuboid_ytemp);
 		}
 		else {
 			last_trans->cuboid = config->cuboid_y; // cuboid config->h_y
+			// printf("last_trans->cuboid = cuboid_y = %p\n", config->cuboid_y);
 		}
 	}
 	else {
