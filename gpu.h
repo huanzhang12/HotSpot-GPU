@@ -57,10 +57,12 @@ typedef struct gpu_config_t_st
 	cl_mem c_model;
 	cl_mem c_layer;
 	cl_mem h_y;
+	cl_mem h_ytemp;
 	cl_mem h_result;
 	cl_mem h_cuboid;
 	int h_cuboid_reference;
 	void* pinned_h_y;
+	void* pinned_h_ytemp;
 	void* pinned_h_cuboid;
 	void* pinned_h_result;
 	cl_mem d_y, d_ytemp;
@@ -92,6 +94,11 @@ typedef struct gpu_config_t_st
 #endif
 	void* last_h_y;
 	int last_io_buf;
+	/* avoid unnecessary memory copy if we have unified GPU/CPU memory */
+	int unified_memory_optimization;
+	/* cuboid pointer using  */
+	double ***cuboid_y;
+	double ***cuboid_ytemp;
 		
 }gpu_config_t;
 
@@ -112,7 +119,7 @@ void gpu_delete_buffers(gpu_config_t *config);
 void* gpu_allocate_cuboid_static(size_t size);
 void gpu_free_cuboid_static(void* cuboid);
 
-double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, double *h, double *yout);
+double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, double *h, grid_model_vector_t *last_trans);
 void rk4_core_gpu_kernel(gpu_config_t *config, void *model, cl_mem *d_y, cl_mem *d_k1, void *p, int n, real h, cl_mem *d_yout, cl_mem *d_ytemp, int do_maxdiff);
 void rk4_core_gpu(gpu_config_t *config, void *model, double *y, double *k1, void *p, int n, double h, double *yout);
 void slope_fn_grid_gpu_kernel(gpu_config_t *config, grid_model_t *model, cl_mem *d_v, grid_model_vector_t *p, cl_mem *d_dv);

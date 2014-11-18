@@ -3107,7 +3107,7 @@ void compute_temp_grid(grid_model_t *model, double *power, double *temp, double 
 			new_h = rk4_gpu(gpu_config, model, model->last_trans->cuboid[0][0],  p,
 				 /* array size = grid size + EXTRA	*/
 				 model->rows * model->cols * model->n_layers + extra_nodes, &h,
-				 model->last_trans->cuboid[0][0]);
+				 model->last_trans);
 		}
 		else
 		#endif

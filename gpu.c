@@ -42,6 +42,7 @@ gpu_config_t default_gpu_config(void)
 
 	config.last_h_y = NULL;
 	config.last_io_buf = 0; // input y, output ytemp
+	config.unified_memory_optimization = 0; // no zero-copy optimization
 
 	return config;
 }
@@ -151,13 +152,16 @@ void gpu_create_buffers(gpu_config_t *config, grid_model_t *model)
 {
 	int err;
 	int i, j;
+	int nl = model->n_layers;
+	int nr = model->rows;
+	int nc = model->cols;
 
 	size_t element_size = sizeof(real);
 	/* we initialize memory to NaN. If the kernel has unexpected accesses, NaN will propagate. */
 	real pattern = NAN;
 	config->element_size = element_size;
 	config->extra_size = ((model->config.model_secondary)? EXTRA + EXTRA_SEC : EXTRA) * element_size;
-	config->cuboid_size = model->rows * model->cols * model->n_layers * element_size;
+	config->cuboid_size = nr * nc * nl * element_size;
 	config->vector_size = config->extra_size + config->cuboid_size;
 
 
@@ -215,16 +219,39 @@ void gpu_create_buffers(gpu_config_t *config, grid_model_t *model)
 	/* Use the pinned buffer in model */
 	free(model->last_trans->cuboid[0][0]);
 	model->last_trans->cuboid[0][0] = config->pinned_h_y;
+	/* save this cuboid pointer so that we can swap it later */
+	config->cuboid_y = model->last_trans->cuboid;
 	/* fix pointers in cuboid array */
 	/* remaining pointers of the 2-d pointer array	*/
-	for (i = 0; i < model->n_layers; i++)
-		for (j = 0; j < model->rows; j++)
+	for (i = 0; i < nl; i++)
+		for (j = 0; j < nr; j++)
 			/* to reach the jth row in the ith layer,
 			 * one has to cross i layers i.e., i*(nr*nc)
 			 * values first and then j rows i.e., j*nc
 			 * values next
 			 */
-			model->last_trans->cuboid[i][j] =  model->last_trans->cuboid[0][0] + (model->n_layers * model->rows) * i + model->rows * j;
+			model->last_trans->cuboid[i][j] =  model->last_trans->cuboid[0][0] + (nl * nr) * i + nr * j;
+	/* host memory for ytemp (the output yout[]), only used if GPU/CPU has unified memory */
+	if (config->unified_memory_optimization) {
+		double ***m;
+		config->h_ytemp = clCreateBuffer(config->_cl_context, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, config->vector_size, NULL, &err);
+		gpu_check_error(err, "clCreateBuffer() for h_ytemp failed.");
+		config->pinned_h_ytemp = clEnqueueMapBuffer(config->_cl_queue, config->h_ytemp, CL_TRUE, CL_MAP_READ | CL_MAP_WRITE, 0, config->vector_size, 0, NULL, NULL, &err);
+		gpu_check_error(err, "clEnqueueMapBuffer() for h_ytemp failed.");
+		/* create another cuboid */
+		m = (double ***) calloc (nl, sizeof(double **));
+		m[0] = (double **) calloc (nl * nr, sizeof(double *));
+		/* remaining pointers of the 1-d pointer array	*/
+		for (i = 1; i < nl; i++)
+	    		m[i] =  m[0] + nr * i;
+		/* remaining pointers of the 2-d pointer array	*/
+		m[0][0] = config->pinned_h_ytemp;
+		for (i = 0; i < nl; i++)
+			for (j = 0; j < nr; j++)
+				m[i][j] =  m[0][0] + (nl * nr) * i + nr * j;
+		/* save this cuboid pointer so that we can swap it later */
+		config->cuboid_ytemp = m;
+	}
 }
 
 struct timespec gpu_perf_timediff(struct timespec start, struct timespec end)
@@ -301,6 +328,12 @@ void gpu_delete_buffers(gpu_config_t *config)
 	clReleaseMemObject(config->h_result);
 	clReleaseMemObject(config->h_cuboid);
 	clReleaseMemObject(config->h_y);
+	if (config->unified_memory_optimization) {
+		clEnqueueUnmapMemObject(config->_cl_queue, config->h_ytemp, config->pinned_h_ytemp, 0, NULL, NULL);
+		clReleaseMemObject(config->h_ytemp);
+		free(config->cuboid_ytemp[0]);
+		free(config->cuboid_ytemp);
+	}
 }
 
 void gpu_print_array(gpu_config_t *config, cl_mem d_mem, size_t offset, size_t size, char* msg)
@@ -325,6 +358,7 @@ void gpu_init(gpu_config_t *config, grid_model_t *model)
 	cl_uint value_size;
 	size_t info_size;
 	char* device_name;
+	char* platform_name;
 	char compiler_options[512] = {0};
 	int err;
 	current_gpu_config = config;
@@ -351,6 +385,17 @@ void gpu_init(gpu_config_t *config, grid_model_t *model)
 	platforms = (cl_platform_id*) malloc(sizeof(cl_platform_id) * value_size);
 	clGetPlatformIDs(value_size, platforms, NULL);
 	
+	// detect platform info and enable uniform memory optimization if possible
+	err = clGetPlatformInfo(platforms[config->platform_id], CL_PLATFORM_VENDOR, 0, NULL, &info_size);
+	gpu_check_error(err, "Couldn't get OpenCL platform information");
+	platform_name = (char*) malloc(sizeof(char) * info_size);
+	clGetPlatformInfo(platforms[config->platform_id], CL_PLATFORM_VENDOR, info_size, platform_name, NULL);
+	printf("OpenCL Platform Vendor: %s\n", platform_name);
+	if (!strcmp(platform_name, "Intel")) {
+		config->unified_memory_optimization = 1;
+		printf("Unified memory optimization has been enabled on this platform.\n");
+	}
+	free(platform_name);
 	
 	// open device
 	err = clGetDeviceIDs(platforms[config->platform_id], CL_DEVICE_TYPE_GPU, 0, NULL, &value_size);
@@ -435,7 +480,13 @@ void gpu_init(gpu_config_t *config, grid_model_t *model)
 	err |= clSetKernelArg(config->_cl_kernel_rk4, GRID_NR, sizeof(model->rows), &model->rows);
 	err |= clSetKernelArg(config->_cl_kernel_rk4, GRID_NC, sizeof(model->cols), &model->cols);
 	err |= clSetKernelArg(config->_cl_kernel_rk4, GRID_LOCALMEM, 4 * (config->local_work_size[0] + 2) * (config->local_work_size[1] + 2) * config->element_size + config->extra_size, NULL); // shared memory for 4 layers
-	err |= clSetKernelArg(config->_cl_kernel_rk4, GRID_IN_CUBOID, sizeof(cl_mem), &config->d_p_cuboid);
+	if (config->unified_memory_optimization) {
+		// use the zero-copy buffer allocated by CL_MEM_ALLOC_HOST_PTR
+		err |= clSetKernelArg(config->_cl_kernel_rk4, GRID_IN_CUBOID, sizeof(cl_mem), &config->h_cuboid);
+	}
+	else {
+		err |= clSetKernelArg(config->_cl_kernel_rk4, GRID_IN_CUBOID, sizeof(cl_mem), &config->d_p_cuboid);
+	}
 	// the 9th argument is h
 	err |= clSetKernelArg(config->_cl_kernel_rk4, GRID_IN_K, sizeof(cl_mem), &config->d_k1);
 	err |= clSetKernelArg(config->_cl_kernel_rk4, GRID_IN_Y, sizeof(cl_mem), &config->d_y);
@@ -532,7 +583,7 @@ void gpu_destroy(gpu_config_t *config)
 #define RK4_MAXUP		5.0
 #define RK4_MAXDOWN		10.0
 #define RK4_PRECISION	0.01
-double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, double *h, double *yout)
+double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, double *h, grid_model_vector_t *last_trans)
 {
 	int i;
 	real max, new_h = (*h);
@@ -540,28 +591,44 @@ double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, dou
 
 	size_t buffer_size = config->vector_size;
 	// printf("buffer_size = %zu, n = %d\n", buffer_size, n);
-	// printf("y = %p, yout = %p, p->cuboid = %p\n", y, yout, ((grid_model_vector_t*)p)->cuboid[0][0]);
-	/* copy p->cuboid to device */
-	/* if cuboid is single precision, it will be initialized as single precision from the caller */
-	clEnqueueWriteBuffer(config->_cl_queue, config->d_p_cuboid, CL_FALSE, 0, buffer_size, ((grid_model_vector_t*)p)->cuboid[0][0], 0, NULL, NULL);
-	/* switching between config->d_y and config->d_temp */
-	config->last_io_buf = !config->last_io_buf;
-	/* copy y to device, only if its pointer location changes */
-	if ( y != config->last_h_y)
-	{
-		clEnqueueWriteBuffer(config->_cl_queue, config->d_y, CL_FALSE, 0, buffer_size, y, 0, NULL, NULL);
-		config->last_h_y = y;
-		/* reseting to the initial state */
-		config->last_io_buf = 0;
-	}
-
-	if (config->last_io_buf) {
-		d_input = &config->d_ytemp;
-		d_output = &config->d_y;
+	// printf("y = %p, yout = %p, p->cuboid = %p\n", y, last_trans->cuboid[0][0], ((grid_model_vector_t*)p)->cuboid[0][0]);
+	if (config->unified_memory_optimization) {
+		/* use zero-copy buffer config->h_cuboid as cuboid input */
+		/* switching between config->h_y and config->h_ytemp */
+		/* config->last_io_buf is initialized to 0. And initially we are using config->h_y as input */
+		config->last_io_buf = !config->last_io_buf;
+		if (config->last_io_buf) {
+			d_input = &config->h_y;
+			d_output = &config->h_ytemp;
+		}
+		else {
+			d_input = &config->h_ytemp;
+			d_output = &config->h_y;
+		}
 	}
 	else {
-		d_input = &config->d_y;
-		d_output = &config->d_ytemp;
+		/* copy p->cuboid to device */
+		/* if cuboid is single precision, it will be initialized as single precision from the caller */
+		clEnqueueWriteBuffer(config->_cl_queue, config->d_p_cuboid, CL_FALSE, 0, buffer_size, ((grid_model_vector_t*)p)->cuboid[0][0], 0, NULL, NULL);
+		/* switching between config->d_y and config->d_ytemp */
+		config->last_io_buf = !config->last_io_buf;
+		/* copy y to device, only if its pointer location changes */
+		if ( y != config->last_h_y)
+		{
+			clEnqueueWriteBuffer(config->_cl_queue, config->d_y, CL_FALSE, 0, buffer_size, y, 0, NULL, NULL);
+			config->last_h_y = y;
+			/* reseting to the initial state */
+			config->last_io_buf = 0;
+		}
+
+		if (config->last_io_buf) {
+			d_input = &config->d_ytemp;
+			d_output = &config->d_y;
+		}
+		else {
+			d_input = &config->d_y;
+			d_output = &config->d_ytemp;
+		}
 	}
 
 	/* evaluate the slope k1 at the beginning */
@@ -610,7 +677,17 @@ double rk4_gpu(gpu_config_t *config, void *model, double *y, void *p, int n, dou
 	} while (new_h < (*h));
 
 	/* commit ytemp to yout	*/
-	clEnqueueReadBuffer(config->_cl_queue, *d_output, CL_TRUE, 0, buffer_size, yout, 0, NULL, NULL);
+	if (config->unified_memory_optimization) {
+		if (config->last_io_buf) {
+			last_trans->cuboid = config->cuboid_ytemp; // cuboid config->h_ytemp
+		}
+		else {
+			last_trans->cuboid = config->cuboid_y; // cuboid config->h_y
+		}
+	}
+	else {
+		clEnqueueReadBuffer(config->_cl_queue, *d_output, CL_TRUE, 0, buffer_size, last_trans->cuboid[0][0], 0, NULL, NULL);
+	}
 
 	/* return the step-size	*/
 	return new_h;
