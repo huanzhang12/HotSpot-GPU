@@ -503,6 +503,7 @@ int main(int argc, char **argv)
 #if VARIABLE_INTVL_SUPPORT > 0
 	FILE* intvlin = NULL;
 	double intvl;
+	double total_time = 0;
 	/* variable timestep from an input file */
 	if (strcmp(model->config->sampling_intvl_file, NULLFILE))
 		if(!(intvlin = fopen(model->config->sampling_intvl_file, "r")))
@@ -634,6 +635,18 @@ int main(int argc, char **argv)
 		printf("Computing step %d...\n", lines);
 		fflush(stdout);
 		#endif
+
+#if VARIABLE_INTVL_SUPPORT > 0
+		if (intvlin) {
+			num = read_vals(intvlin, &intvl, 1);
+			if (num != 1)
+				fatal("invalid samling interval file format\n");
+			model->config->sampling_intvl = intvl;
+			total_time += intvl;
+			// printf("Current sampling interval: %g. Total time %g\n", model->config->sampling_intvl, total_time);
+		}
+#endif
+
 		/* compute temperature	*/
 		if (do_transient) {
 			/* if natural convection is considered, update transient convection resistance first */
@@ -642,15 +655,6 @@ int main(int argc, char **argv)
 				natural = package_model(model->config, table, size, avg_sink_temp);
 				populate_R_model(model, flp);
 			}
-#if VARIABLE_INTVL_SUPPORT > 0
-			if (intvlin) {
-				num = read_vals(intvlin, &intvl, 1);
-				if (num != 1)
-					fatal("invalid samling interval file format\n");
-				model->config->sampling_intvl = intvl;
-				// printf("Current sampling interval: %g\n", model->config->sampling_intvl);
-			}
-#endif
 			/* for the grid model, only the first call to compute_temp
 			 * passes a non-null 'temp' array. if 'temp' is  NULL, 
 			 * compute_temp remembers it from the last non-null call. 
@@ -692,6 +696,13 @@ int main(int argc, char **argv)
 		/* for computing average	*/
 		if (model->type == BLOCK_MODEL)
 			for(i=0; i < n; i++) {
+#if VARIABLE_INTVL_SUPPORT > 0
+				/* If variable simulation interval has been enabled, power numbers should be weighted */
+				if (intvlin) {
+					dynamic_power[i] *= intvl;
+					static_power[i] *= intvl;
+				}
+#endif
 #if ENABLE_LEAKAGE > 0
 				// the overall power is not calibrated using temperature. The feedback will be done in steady_state_temp()
 				overall_power[i] += (dynamic_power[i] + static_power[i]);
@@ -704,6 +715,13 @@ int main(int argc, char **argv)
 			for(i=0, base=0; i < model->grid->n_layers; i++) {
 				if(model->grid->layers[i].has_power)
 					for(j=0; j < model->grid->layers[i].flp->n_units; j++) {
+#if VARIABLE_INTVL_SUPPORT > 0
+				/* If variable simulation interval has been enabled, power numbers should be weighted */
+					if (intvlin) {
+						dynamic_power[base+j] *= intvl;
+						static_power[base+j] *= intvl;
+					}
+#endif
 #if ENABLE_LEAKAGE > 0
 						overall_power[base+j] += (dynamic_power[base+j] + static_power[base+j]);
 						static_overall_power[base+j] += static_power[base+j];
@@ -720,6 +738,14 @@ int main(int argc, char **argv)
 	if(!lines)
 		fatal("no power numbers in trace file\n");
 
+	double divisor = lines;
+#if VARIABLE_INTVL_SUPPORT > 0
+	/* If variable simulation interval has been enabled, power should be divided by total time */
+	if (intvlin) {
+		divisor = total_time;
+	}
+#endif
+
 #if GPGPU > 0
 	if (do_transient)
 		gpu_destroy(&gpu_config);
@@ -729,10 +755,10 @@ int main(int argc, char **argv)
 		/* for computing overall average (overall_power) */
 		if (model->type == BLOCK_MODEL)
 			for(i=0; i < n; i++) {
-				overall_power[i] /= lines;
+				overall_power[i] /= divisor;
 				//overall_power[i] /=150; //reduce input power for natural convection
 #if ENABLE_LEAKAGE > 0
-				static_overall_power[i] /= lines;
+				static_overall_power[i] /= divisor;
 #endif
 				total_power += overall_power[i];
 			}
@@ -740,9 +766,9 @@ int main(int argc, char **argv)
 			for(i=0, base=0; i < model->grid->n_layers; i++) {
 				if(model->grid->layers[i].has_power)
 					for(j=0; j < model->grid->layers[i].flp->n_units; j++) {
-						overall_power[base+j] /= lines;
+						overall_power[base+j] /= divisor;
 #if ENABLE_LEAKAGE > 0
-						static_overall_power[base+j] /= lines;
+						static_overall_power[base+j] /= divisor;
 #endif
 						total_power += overall_power[base+j];
 					}
