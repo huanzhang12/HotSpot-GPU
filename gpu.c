@@ -389,9 +389,11 @@ void gpu_init(gpu_config_t *config, grid_model_t *model)
 	gpu_check_error(err, "Couldn't open OpenCL platform");
 
 	printf("%d OpenCL platforms detected.\n", value_size);
+	if (config->platform_id < 0)
+		config->platform_id = 0;
 	if (config->platform_id >= value_size) {
-		printf("gpu_platform should be in range 0 - %d\n", value_size - 1);
-		fatal("Please choose a reasonable gpu_platform value");
+		printf("gpu_platform should be in range 0 - %d. Use %d instead\n", value_size - 1, value_size - 1);
+		config->platform_id = value_size - 1;
 	}
 	platforms = (cl_platform_id*) malloc(sizeof(cl_platform_id) * value_size);
 	clGetPlatformIDs(value_size, platforms, NULL);
@@ -412,9 +414,11 @@ void gpu_init(gpu_config_t *config, grid_model_t *model)
 	err = clGetDeviceIDs(platforms[config->platform_id], CL_DEVICE_TYPE_GPU, 0, NULL, &value_size);
 	gpu_check_error(err, "Couldn't access any GPU devices");
 	printf("%d OpenCL devices detected.\n", value_size);
+	if (config->device_id < 0)
+		config->device_id = 0;
 	if (config->device_id >= value_size) {
-		printf("gpu_device should be in range 0 - %d\n", value_size - 1);
-		fatal("Please choose a reasonable gpu_device value");
+		printf("gpu_device should be in range 0 - %d. Use %d instead\n", value_size - 1, value_size - 1);
+		config->device_id = value_size - 1;
 	}
 	devices = (cl_device_id*) malloc(sizeof(cl_device_id) * value_size);
 	clGetDeviceIDs(platforms[config->platform_id], CL_DEVICE_TYPE_GPU, value_size, devices, NULL);
