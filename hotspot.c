@@ -699,8 +699,12 @@ int main(int argc, char **argv)
 #if VARIABLE_INTVL_SUPPORT > 0
 				/* If variable simulation interval has been enabled, power numbers should be weighted */
 				if (intvlin) {
+#if ENABLE_LEAKAGE > 0
 					dynamic_power[i] *= intvl;
 					static_power[i] *= intvl;
+#else
+					power[i] *= intvl;
+#endif
 				}
 #endif
 #if ENABLE_LEAKAGE > 0
@@ -718,8 +722,12 @@ int main(int argc, char **argv)
 #if VARIABLE_INTVL_SUPPORT > 0
 				/* If variable simulation interval has been enabled, power numbers should be weighted */
 					if (intvlin) {
+#if ENABLE_LEAKAGE > 0
 						dynamic_power[base+j] *= intvl;
 						static_power[base+j] *= intvl;
+#else
+						power[base+j] *= intvl;
+#endif
 					}
 #endif
 #if ENABLE_LEAKAGE > 0
