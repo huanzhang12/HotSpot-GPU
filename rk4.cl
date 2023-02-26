@@ -64,8 +64,8 @@ __kernel void max_reduce(__global real *y, unsigned int n, __local real *local_r
 }
 
 void sum_row(__global real *v, int nl, int nr, int nc, __local real *local_result, int n, int i, real sub_val) {
-	uint local_id = mad24(get_local_id(1), LOCAL_SIZE_0, get_local_id(0));
-	uint threads_per_group = mul24(LOCAL_SIZE_0, LOCAL_SIZE_1);
+	uint local_id = mad24(get_local_id(1), (int)LOCAL_SIZE_0, get_local_id(0));
+	uint threads_per_group = mul24((int)LOCAL_SIZE_0, (int)LOCAL_SIZE_1);
 	real private_sum = 0.0;
 	for(int j = local_id; j < nc; j += threads_per_group)
 		private_sum += (A3D(v,n,i,j,nl,nr,nc) - sub_val);
@@ -80,8 +80,8 @@ void sum_row(__global real *v, int nl, int nr, int nc, __local real *local_resul
 }
 
 void sum_row_with_endpoint(int nl, int nr, int nc, __local real *local_result, int n, int i, real sub_val, real h, __global real *k, __global real *y) {
-	uint local_id = mad24(get_local_id(1), LOCAL_SIZE_0, get_local_id(0));
-	uint threads_per_group = mul24(LOCAL_SIZE_0, LOCAL_SIZE_1);
+	uint local_id = mad24(get_local_id(1), (int)LOCAL_SIZE_0, get_local_id(0));
+	uint threads_per_group = mul24((int)LOCAL_SIZE_0, (int)LOCAL_SIZE_1);
 	real private_sum = 0.0;
 	for(int j = local_id; j < nc; j += threads_per_group)
 		private_sum += (mad(h, A3D(k,n,i,j,nl,nr,nc), A3D(y,n,i,j,nl,nr,nc)) - sub_val);
@@ -96,8 +96,8 @@ void sum_row_with_endpoint(int nl, int nr, int nc, __local real *local_result, i
 }
 
 void sum_col(__global real *v, int nl, int nr, int nc, __local real *local_result, int n, int j, real sub_val) {
-	uint local_id = mad24(get_local_id(1), LOCAL_SIZE_0, get_local_id(0));
-	uint threads_per_group = mul24(LOCAL_SIZE_0, LOCAL_SIZE_1);
+	uint local_id = mad24(get_local_id(1), (int)LOCAL_SIZE_0, get_local_id(0));
+	uint threads_per_group = mul24((int)LOCAL_SIZE_0, (int)LOCAL_SIZE_1);
 	real private_sum = 0.0;
 	for(int i = local_id; i < nr; i += threads_per_group)
 		private_sum += (A3D(v,n,i,j,nl,nr,nc) - sub_val);
@@ -112,8 +112,8 @@ void sum_col(__global real *v, int nl, int nr, int nc, __local real *local_resul
 }
 
 void sum_col_with_endpoint(int nl, int nr, int nc, __local real *local_result, int n, int j, real sub_val, real h, __global real *k, __global real *y) {
-	uint local_id = mad24(get_local_id(1), LOCAL_SIZE_0, get_local_id(0));
-	uint threads_per_group = mul24(LOCAL_SIZE_0, LOCAL_SIZE_1);
+	uint local_id = mad24(get_local_id(1), (int)LOCAL_SIZE_0, get_local_id(0));
+	uint threads_per_group = mul24((int)LOCAL_SIZE_0, (int)LOCAL_SIZE_1);
 	real private_sum = 0.0;
 	for(int i = local_id; i < nr; i += threads_per_group)
 		private_sum += (mad(h, A3D(k,n,i,j,nl,nr,nc), A3D(y,n,i,j,nl,nr,nc)) - sub_val);
@@ -148,11 +148,11 @@ __kernel void slope_fn_pack_gpu(__constant gpu_grid_model_t *model __attribute__
 	/* pointer to the starting address of the extra nodes (now passed as an argument)	*/
 	// __global real *x = v + nl_nr_nc_product;
 
-	unsigned int block_id = mad24(get_group_id(1), get_num_groups(0), get_group_id(0));
+	unsigned int block_id = mad24((int)get_group_id(1), (int)get_num_groups(0), (int)get_group_id(0));
 	// unsigned int thread_id = mad24(get_global_id(1), NUMBER_OF_ROWS, get_global_id(0));
-	unsigned int local_id = mad24(get_local_id(1), LOCAL_SIZE_0, get_local_id(0));
-	unsigned int num_blocks_mask = (0x1u << (31 - clz(mul24(NUM_GROUPS_1, NUM_GROUPS_0)))) - 0x1u;
-	uint threads_per_group = mul24((LOCAL_SIZE_0), (LOCAL_SIZE_1));
+	unsigned int local_id = mad24(get_local_id(1), (int)LOCAL_SIZE_0, get_local_id(0));
+	unsigned int num_blocks_mask = (0x1u << (31 - clz(mul24((int)NUM_GROUPS_1, (int)NUM_GROUPS_0)))) - 0x1u;
+	uint threads_per_group = mul24(((int)LOCAL_SIZE_0), ((int)LOCAL_SIZE_1));
 	// unsigned int num_blocks_mask = (0x1u << (31 - clz(mul24(get_num_groups(1), get_num_groups(0))))) - 0x1u;
 	uint second_wave_front = (threads_per_group > 64) ? 64 : 1;
 
@@ -651,7 +651,7 @@ void load_v_to_local(__global real *v, __local real * v_cached_layer, int n, uns
 {
 	int i = get_global_id(1); // row (row-major)
 	int j = get_global_id(0); // column
-	int index = mad24(get_local_id(1) + 1, LOCAL_SIZE_0 + 2, get_local_id(0) + 1);
+	int index = mad24(get_local_id(1) + 1, (int)LOCAL_SIZE_0 + 2, get_local_id(0) + 1);
 	uint center_off = A3D_offset(n,i,j,nl,nr,nc);
 	real v_value = v[center_off];
 	v_cached_layer[index] = v_value; // local location: row = get_local_id(1)+1, column = get_local_id(0)+1
@@ -661,16 +661,16 @@ void load_v_to_local(__global real *v, __local real * v_cached_layer, int n, uns
 		v_cached_layer[index] = (i > 0) ? v[center_off - nc] : v_value;
 	}
 	else if (get_local_id(1) == LOCAL_SIZE_1 - 1) {
-		index = mad24(LOCAL_SIZE_1 + 1, LOCAL_SIZE_0 + 2, get_local_id(0) + 1);
+		index = mad24((int)LOCAL_SIZE_1 + 1, (int)LOCAL_SIZE_0 + 2, get_local_id(0) + 1);
 		v_cached_layer[index] = (i < nr-1) ? v[center_off + nc]: v_value;
 	}
 	/* use the first and last worker columns to retrive the first and last extra columns */
 	if (get_local_id(0) == 0) {
-		index = mul24(get_local_id(1) + 1, LOCAL_SIZE_0 + 2);
+		index = mul24(get_local_id(1) + 1, (int)LOCAL_SIZE_0 + 2);
 		v_cached_layer[index] = (j > 0) ? v[center_off - 1] : v_value;
 	}
 	else if (get_local_id(0) == LOCAL_SIZE_0 - 1) {
-		index = mad24(get_local_id(1) + 1, LOCAL_SIZE_0 + 2, LOCAL_SIZE_0 + 1);
+		index = mad24(get_local_id(1) + 1, (int)LOCAL_SIZE_0 + 2, (int)LOCAL_SIZE_0 + 1);
 		v_cached_layer[index] = (j < nc-1) ? v[center_off + 1] : v_value;
 	}
 	barrier(CLK_LOCAL_MEM_FENCE);
@@ -684,7 +684,7 @@ void load_v_to_local_with_endpoint(__global real *y, __global real *k, real h, _
 	uint center_off = A3D_offset(n,i,j,nl,nr,nc);
 	real v_value = mad(h, k[center_off], y[center_off]);
 	if (save_to_local) {
-		int index = mad24(get_local_id(1) + 1, LOCAL_SIZE_0 + 2, get_local_id(0) + 1);
+		int index = mad24(get_local_id(1) + 1, (int)LOCAL_SIZE_0 + 2, get_local_id(0) + 1);
 		v_cached_layer[index] = v_value; // local location: row = get_local_id(1)+1, column = get_local_id(0)+1
 		/* use the first and last worker rows to retrive the first and last extra rows */
 		if (get_local_id(1) == 0) {
@@ -693,18 +693,18 @@ void load_v_to_local_with_endpoint(__global real *y, __global real *k, real h, _
 			v_cached_layer[index] = (i > 0) ? mad(h, k[north_off], y[north_off]) : v_value;
 		}
 		else if (get_local_id(1) == LOCAL_SIZE_1 - 1) {
-			index = mad24(LOCAL_SIZE_1 + 1, LOCAL_SIZE_0 + 2, get_local_id(0) + 1);
+			index = mad24((int)LOCAL_SIZE_1 + 1, (int)LOCAL_SIZE_0 + 2, get_local_id(0) + 1);
 			uint south_off = center_off + nc;
 			v_cached_layer[index] = (i < nr-1) ? mad(h, k[south_off], y[south_off]) : v_value;
 		}
 		/* use the first and last worker columns to retrive the first and last extra columns */
 		if (get_local_id(0) == 0) {
-			index = mul24(get_local_id(1) + 1, LOCAL_SIZE_0 + 2);
+			index = mul24(get_local_id(1) + 1, (int)LOCAL_SIZE_0 + 2);
 			uint west_off = center_off - 1;
 			v_cached_layer[index] = (j > 0) ? mad(h, k[west_off], y[west_off]) : v_value;
 		}
 		else if (get_local_id(0) == LOCAL_SIZE_0 - 1) {
-			index = mad24(get_local_id(1) + 1, LOCAL_SIZE_0 + 2, LOCAL_SIZE_0 + 1);
+			index = mad24(get_local_id(1) + 1, (int)LOCAL_SIZE_0 + 2, (int)LOCAL_SIZE_0 + 1);
 			uint east_off = center_off + 1;
 			v_cached_layer[index] = (j < nc-1) ? mad(h, k[east_off], y[east_off]) : v_value;
 		}
@@ -720,8 +720,8 @@ void load_v_to_local_with_endpoint(__global real *y, __global real *k, real h, _
 
 void load_extra_to_local_with_endpoint(__global real *y, __global real *k, real h, __local real * extra_cached, int n)
 {
-	int id = mad24(get_local_id(1), LOCAL_SIZE_0, get_local_id(0)); // row (row-major)
-	int stride = mul24(LOCAL_SIZE_1, LOCAL_SIZE_0);
+	int id = mad24(get_local_id(1), (int)LOCAL_SIZE_0, get_local_id(0)); // row (row-major)
+	int stride = mul24((int)LOCAL_SIZE_1, (int)LOCAL_SIZE_0);
 	int i;
 	for (i = id; i < n; i += stride) {
 		extra_cached[i] = mad(h, k[i], y[i]);
@@ -731,8 +731,8 @@ void load_extra_to_local_with_endpoint(__global real *y, __global real *k, real 
 
 void load_extra_to_local(__global real *x, __local real * extra_cached, int n)
 {
-	int id = mad24(get_local_id(1), LOCAL_SIZE_0, get_local_id(0)); // row (row-major)
-	int stride = mul24(LOCAL_SIZE_1, LOCAL_SIZE_0);
+	int id = mad24(get_local_id(1), (int)LOCAL_SIZE_0, get_local_id(0)); // row (row-major)
+	int stride = mul24((int)LOCAL_SIZE_1, (int)LOCAL_SIZE_0);
 	int i;
 	for (i = id; i < n; i += stride) {
 		extra_cached[i] = x[i];
@@ -773,7 +773,7 @@ __kernel void slope_fn_grid_gpu(__constant gpu_grid_model_t *model __attribute__
 
 	/* local memory cached v[] (4 layers maximum) */
 	__local real * v_cached[4];
-	n = mul24((LOCAL_SIZE_0 + 2), (LOCAL_SIZE_1 + 2));
+	n = mul24(((int)LOCAL_SIZE_0 + 2), ((int)LOCAL_SIZE_1 + 2));
 	v_cached[0] = local_result;
 	v_cached[1] = local_result + n;
 	v_cached[2] = v_cached[1] + n;
